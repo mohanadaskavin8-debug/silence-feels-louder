@@ -396,8 +396,10 @@ export function buildMap(map: MapDef): MapView {
   const lampMats = new Map<number, THREE.MeshStandardMaterial>()
   const poolMats = new Map<number, THREE.MeshBasicMaterial>()
   map.lights.forEach((l, i) => {
-    const pole = add(new THREE.Mesh(track(new THREE.CylinderGeometry(0.07, 0.1, l.height, 8)), poleMat))
-    pole.position.set(l.x, l.height / 2, l.z)
+    if (l.pole !== false) {
+      const pole = add(new THREE.Mesh(track(new THREE.CylinderGeometry(0.07, 0.1, l.height, 8)), poleMat))
+      pole.position.set(l.x, l.height / 2, l.z)
+    }
     let lampMat = lampMats.get(l.color)
     if (!lampMat) {
       lampMat = track(new THREE.MeshStandardMaterial({ color: 0x111111, emissive: l.color, emissiveIntensity: 2.2 }))

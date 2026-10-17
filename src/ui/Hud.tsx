@@ -33,7 +33,7 @@ function HitMarker({ kind }: { kind: 'hit' | 'head' | 'kill' }) {
 function Banner({ hud }: { hud: HudSnapshot }) {
   if (!hud.banner) return null
   return (
-    <div className="banner" key={hud.banner.id}>
+    <div className="banner" key={hud.banner.id} style={{ animationDelay: `${-hud.banner.age}s` }}>
       <div className="banner-title">{hud.banner.title}</div>
       <div className="banner-sub">{hud.banner.sub}</div>
     </div>
@@ -114,7 +114,7 @@ function DamageIndicators({ hud }: { hud: HudSnapshot }) {
       {hud.damage.map((d) => (
         // angle 0 = straight ahead (top of screen), positive = to the left.
         <div key={d.id} className="damage-arc" style={{ transform: `rotate(${(-d.angle * 180) / Math.PI}deg)` }}>
-          <i />
+          <i style={{ animationDelay: `${-d.age}s` }} />
         </div>
       ))}
     </div>
@@ -125,7 +125,8 @@ function Vignette({ hud }: { hud: HudSnapshot }) {
   const frac = hud.health / hud.maxHealth
   const hurt = Math.max(0, 1 - frac / 0.6)
   const [flash, setFlash] = useState(0)
-  const lastId = hud.damage.length ? hud.damage[hud.damage.length - 1].id : 0
+  const latest = hud.damage.length ? hud.damage[hud.damage.length - 1] : null
+  const lastId = latest && latest.age < 0.25 ? latest.id : 0
   useEffect(() => {
     if (!lastId) return
     setFlash(1)
@@ -135,8 +136,45 @@ function Vignette({ hud }: { hud: HudSnapshot }) {
   return <div className="vignette" style={{ opacity: Math.min(1, hurt * 0.85 + flash * 0.5) }} aria-hidden />
 }
 
+function HubHud({ hud }: { hud: HudSnapshot }) {
+  return (
+    <>
+      <div className="objective">
+        <div className="eyebrow">Home · safe zone</div>
+        <div className="obj-title">The Ville</div>
+        <div className="obj-line">Mission board · Armory · Squad lobby</div>
+      </div>
+      <div className="stats">
+        <span className="dim">{hud.fps} fps</span>
+        {hud.muted && <span className="dim">muted</span>}
+      </div>
+      {hud.station && hud.status === 'hub' && (
+        <div className="interact" key={hud.station.id}>
+          <kbd>E</kbd>
+          <span>{hud.station.label}</span>
+        </div>
+      )}
+    </>
+  )
+}
+
 export function Hud({ hud, onCapture }: { hud: HudSnapshot; onCapture: () => void }) {
-  const needsCapture = hud.status === 'playing' && !hud.pointerLocked && !hud.freeLook && !hud.scripted
+  const live = hud.status === 'playing' || hud.status === 'hub'
+  const needsCapture = live && !hud.pointerLocked && !hud.freeLook && !hud.scripted
+  if (hud.scene === 'hub') {
+    return (
+      <div className="hud">
+        <HubHud hud={hud} />
+        {needsCapture && (
+          <button className="capture" onClick={onCapture}>
+            <b>Click to capture the mouse</b>
+            <span>Walk up to a station and press E</span>
+          </button>
+        )}
+        {hud.freeLook && live && <div className="freelook-hint">Mouse capture unavailable here — move the mouse over the game to look.</div>}
+      </div>
+    )
+  }
   return (
     <div className="hud">
       <Vignette hud={hud} />
@@ -159,7 +197,7 @@ export function Hud({ hud, onCapture }: { hud: HudSnapshot; onCapture: () => voi
           <span>The encounter is frozen until you do</span>
         </button>
       )}
-      {hud.freeLook && hud.status === 'playing' && <div className="freelook-hint">Mouse capture unavailable here — move the mouse over the game to look.</div>}
+      {hud.freeLook && live && <div className="freelook-hint">Mouse capture unavailable here — move the mouse over the game to look.</div>}
     </div>
   )
 }

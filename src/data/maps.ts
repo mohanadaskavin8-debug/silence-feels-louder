@@ -144,7 +144,7 @@ export const THE_VILLE: MapDef = {
     { x: 9, z: -8, height: 6, color: 0xffa860, intensity: 60 },
     { x: -9, z: 9, height: 6, color: 0xffa860, intensity: 55 },
     { x: 12, z: 4, height: 3.2, color: 0xd9c7ff, intensity: 22 },
-    { x: -15.4, z: 0, height: 3.6, color: 0xfff1d6, intensity: 18 },
+    { x: -16.45, z: 0, height: 3.7, color: 0xfff1d6, intensity: 18, pole: false },
   ],
   markings: [
     // a faded half court in the plaza

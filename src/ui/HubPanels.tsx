@@ -12,6 +12,7 @@ const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60
 function useEscape(onClose: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.repeat) return
       if (e.code === 'Escape' || e.code === 'KeyE') {
         e.preventDefault()
         onClose()

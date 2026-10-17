@@ -58,8 +58,9 @@ export interface HudSnapshot {
   elapsed: number
   /** Increments per event; the UI keys animations on these ids. */
   hitMarker: { id: number; kind: 'hit' | 'head' | 'kill' }
-  damage: { id: number; angle: number }[]
-  banner: { id: number; title: string; sub: string } | null
+  /** `age` (seconds) lets a remounted HUD resume animations mid-way instead of replaying them. */
+  damage: { id: number; angle: number; age: number }[]
+  banner: { id: number; title: string; sub: string; age: number } | null
   pointerLocked: boolean
   freeLook: boolean
   /** Automated test input is driving the player. */

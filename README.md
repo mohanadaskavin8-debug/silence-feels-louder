@@ -1,8 +1,9 @@
 # KS BVNDZ — Silence Feels Louder
 
 A browser-based, third-person 3D zombie survival shooter built around the *Silence Feels Louder* album.
-**Current state: Milestone 1, a playable prototype.** One test zone (Dolly, Block 7), one sidearm, the Regular infected,
-three waves, death and restart. Solo only. Online co-op is **not implemented yet**.
+**Current state: Milestones 1–2.** Start in **The Ville**, the safe hub: use the mission board, the armory loadout and
+the squad lobby. Then deploy to **Dolly · Block 7** (three waves of the Regular infected) and return with your results
+saved. Solo only. Online co-op is **not implemented yet**. See [PROJECT_STATUS.md](PROJECT_STATUS.md).
 
 ## Run it
 
@@ -14,11 +15,13 @@ npm run build        # typecheck + production build to dist/
 npm run smoke        # drives the production build in headless Chromium (run `npm run build` first)
 ```
 
-Open the page, click **Deploy**, and click once more if the browser asks to capture the mouse.
+Open the page, click **Enter The Ville**, and click once more if the browser asks to capture the mouse. Walk to a
+glowing ring and press **E** to use a station. The mission board deploys you into a mission.
 
 | Input | Action |
 |---|---|
 | W A S D | Move (camera-relative) |
+| E | Use a station (The Ville) |
 | Mouse | Look |
 | Left click / Right click | Fire / Aim (hold) |
 | Shift | Sprint |
@@ -35,14 +38,16 @@ src/
             world.ts (Simulation, fixed 60 Hz step), player.ts, weapon.ts, zombie.ts,
             encounter.ts (waves), nav.ts (flow-field pathfinding), collision.ts,
             camera.ts (the third-person rig, shared so shots go exactly through the crosshair).
-  data/     Tunable content: weapons, enemy archetypes, characters/outfits, maps and encounters.
+  data/     Tunable content: weapons, enemy archetypes, characters/outfits, maps (Dolly Block 7, The Ville),
+            encounters and the mission catalogue.
   render/   Three.js view of the sim: procedural placeholder models, map builder, effects.
-  game/     The loop (fixed-step sim + interpolated rendering), HUD store, automation hooks.
+  game/     The loop (fixed-step sim + interpolated rendering), scene flow (hub ⇄ missions), HUD store,
+            persistent profile (profile.ts), automation hooks.
   input/    Keyboard/mouse with pointer lock, edge-latched actions, client-side recoil.
   audio/    WebAudio-synthesized SFX and a procedural placeholder score; music manifest.
   net/      GameSession seam. Only LocalSession exists today (see "Multiplayer").
   ui/       React screens and HUD.
-tests/smoke.mjs   Playwright end-to-end check of the Milestone 1 definition of done.
+tests/smoke.mjs   Playwright end-to-end run: title → hub → mission board → combat → death/retry → clear → hub.
 ```
 
 Key decisions:

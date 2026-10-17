@@ -46,6 +46,11 @@ export class AudioEngine {
     }
   }
 
+  /** Silence everything while the tab is hidden; unlock() resumes. */
+  suspend() {
+    if (this.ctx && this.ctx.state === 'running') void this.ctx.suspend()
+  }
+
   setMuted(m: boolean) {
     this.muted = m
     if (this.ctx) this.master.gain.setTargetAtTime(m ? 0 : 0.8, this.ctx.currentTime, 0.05)

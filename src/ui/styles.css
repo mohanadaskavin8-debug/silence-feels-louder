@@ -438,8 +438,10 @@ body,
 .freelook-hint {
   position: absolute;
   left: 50%;
-  bottom: 28px;
+  top: 112px;
   transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  text-align: center;
   font-family: var(--mono);
   font-size: 11px;
   letter-spacing: 0.08em;
@@ -733,6 +735,11 @@ body,
     right: 16px;
     bottom: 16px;
   }
+  .stats {
+    top: 96px;
+    left: 16px;
+    right: auto;
+  }
   .title-screen {
     background: rgba(8, 8, 9, 0.86);
   }
@@ -741,5 +748,335 @@ body,
 @media (prefers-reduced-motion: reduce) {
   .grain {
     animation: none;
+  }
+}
+
+/* ---------------------------------------------------------------- hub */
+
+.interact {
+  position: absolute;
+  left: 50%;
+  bottom: 22%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: rgba(11, 11, 12, 0.72);
+  border: 1px solid var(--line);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  animation: rise 0.18s ease-out;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translate(-50%, 6px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--bone-dim);
+  border-bottom-width: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--bone);
+}
+
+.panel.wide {
+  width: min(920px, calc(100% - 32px));
+}
+
+.panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.panel-title {
+  margin: 6px 0 0;
+  font-size: 34px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.btn.close {
+  min-height: 38px;
+  padding: 0 14px;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.btn.close kbd {
+  height: 20px;
+  min-width: 0;
+  font-size: 10px;
+}
+
+.btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) 1fr;
+  gap: 20px;
+}
+
+.mission-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 56vh;
+  overflow-y: auto;
+}
+
+.mission-row {
+  width: 100%;
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  text-align: left;
+  background: var(--char);
+  border: 1px solid var(--line);
+  border-left: 2px solid transparent;
+  color: var(--bone);
+  font-family: var(--display);
+  cursor: pointer;
+}
+
+.mission-row:hover {
+  border-color: var(--bone-faint);
+}
+
+.mission-row.sel {
+  border-left-color: var(--bone);
+  background: var(--char-2);
+}
+
+.mission-row:focus-visible {
+  outline: 2px solid var(--bone);
+  outline-offset: 2px;
+}
+
+.mission-row-name {
+  font-size: 18px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.mission-row-state {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bone-faint);
+}
+
+.st-dev .mission-row-name,
+.st-locked .mission-row-name {
+  color: var(--bone-dim);
+}
+
+.mission-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mission-detail .mission-name {
+  margin: 8px 0 6px;
+  font-size: 28px;
+}
+
+.objectives {
+  margin: 6px 0 14px;
+  padding-left: 18px;
+  color: var(--bone-dim);
+  line-height: 1.6;
+}
+
+.record {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bone-faint);
+}
+
+.record b {
+  color: var(--bone);
+  font-weight: 600;
+}
+
+.squad-line {
+  margin-bottom: 8px;
+  font-size: 14px;
+  color: var(--bone-dim);
+}
+
+.note {
+  margin: 4px 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--bone-faint);
+}
+
+.btn.deploy {
+  margin-top: auto;
+  align-self: flex-start;
+  min-width: 200px;
+}
+
+.stat-bars {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 14px;
+}
+
+.stat-bars div {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.stat-bars dt {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+}
+
+.stat-bars dd {
+  position: relative;
+  height: 6px;
+  margin: 0;
+  background: rgba(217, 212, 202, 0.12);
+}
+
+.stat-bars dd span {
+  position: absolute;
+  inset: 0;
+  background: var(--bone);
+  transform-origin: left center;
+}
+
+.modes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.mode {
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+  background: var(--char);
+  border: 1px solid var(--line);
+  color: var(--bone);
+  font-family: var(--display);
+  cursor: pointer;
+}
+
+.mode b {
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.mode span {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--bone-faint);
+}
+
+.mode.sel,
+.chip.sel {
+  border-color: var(--bone);
+  background: var(--char-2);
+}
+
+.fourth {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.chip {
+  padding: 8px 14px;
+  background: var(--char);
+  border: 1px solid var(--line);
+  color: var(--bone);
+  font-family: var(--display);
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.roster {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 16px 0 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.member {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  background: var(--char);
+  border: 1px solid var(--line);
+}
+
+.member b {
+  font-size: 18px;
+  text-transform: uppercase;
+}
+
+.member .tag {
+  margin: 0;
+  justify-self: start;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.swatches {
+  display: flex;
+  gap: 4px;
+}
+
+.swatches i {
+  width: 18px;
+  height: 18px;
+  border: 1px solid var(--line);
+}
+
+@media (max-width: 720px) {
+  .board {
+    grid-template-columns: 1fr;
+  }
+  .modes {
+    grid-template-columns: repeat(2, 1fr);
   }
 }

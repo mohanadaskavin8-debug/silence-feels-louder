@@ -17,7 +17,9 @@ import { dirname, join } from 'node:path'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const shots = join(root, 'shots')
 mkdirSync(shots, { recursive: true })
-const PORT = 4180
+// SMOKE_DIST lets a second build be tested while dist/ is in use elsewhere.
+const DIST = process.env.SMOKE_DIST || join(root, 'dist')
+const PORT = Number(process.env.SMOKE_PORT || 4180)
 const URL = `http://localhost:${PORT}/`
 
 const results = []
@@ -27,13 +29,13 @@ const check = (name, ok, detail = '') => {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-if (!existsSync(join(root, 'dist', 'index.html'))) {
-  console.error('dist/ missing: run `npm run build` first')
+if (!existsSync(join(DIST, 'index.html'))) {
+  console.error(`${DIST} missing: run \`npm run build\` first`)
   process.exit(2)
 }
 
 // Run Vite's own entry with node (not npx) so killing the child really stops the server.
-const server = spawn(process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'preview', '--port', String(PORT), '--strictPort'], {
+const server = spawn(process.execPath, [join(root, 'node_modules', 'vite', 'bin', 'vite.js'), 'preview', '--outDir', DIST, '--port', String(PORT), '--strictPort'], {
   cwd: root,
   stdio: 'pipe',
 })
@@ -97,26 +99,22 @@ try {
   await page.waitForFunction(() => !!window.__sfl, null, { timeout: 15000 })
   await sleep(1500)
 
-  // 1. Title screen renders over a live 3D scene.
-  const titleVisible = await visible('Deploy')
-  check('title screen shows a Deploy button', titleVisible)
+  // 1. Title screen renders over a live 3D scene of The Ville.
+  check('title screen shows Enter The Ville', await visible('Enter The Ville'))
   const p0 = await page.evaluate(() => window.__sfl.probe())
   check('3D canvas renders a non-blank frame', p0.std > 6 && p0.mean > 3, `mean ${p0.mean.toFixed(1)}, std ${p0.std.toFixed(1)}, ${p0.w}x${p0.h}`)
   await page.screenshot({ path: join(shots, '01-title.png') })
 
-  // 2. Deploy with a real click.
-  await page.locator('button', { hasText: 'Deploy' }).click()
+  // 2. Into the hub with a real click.
+  await page.locator('button', { hasText: 'Enter The Ville' }).click()
   await sleep(400)
   const lockGranted = await page.evaluate(() => document.pointerLockElement !== null)
   let s = await state()
-  check('Deploy starts the encounter', s.status === 'playing', `status=${s.status}, pointer lock ${lockGranted ? 'granted' : 'not granted (headless)'}`)
+  check('Enter The Ville opens the safe hub', s.status === 'hub' && s.map === 'the-ville', `status=${s.status} map=${s.map}, pointer lock ${lockGranted ? 'granted' : 'not granted'}`)
   // Gate the sim open without overriding any real keys/mouse (pointer lock may be refused headless).
-  await page.evaluate(() => {
-    window.__sfl.setInput({})
-    window.__sfl.holdWaves()
-  })
+  await page.evaluate(() => window.__sfl.setInput({}))
 
-  // 3. Real keyboard movement, camera-relative.
+  // 3. Real keyboard movement in the hub, camera-relative.
   const before = (await state()).player.pos
   await page.keyboard.down('KeyW')
   await waitTicks(72)
@@ -129,6 +127,26 @@ try {
   await page.keyboard.up('KeyD')
   const s2 = await state()
   check('D key strafes right (+X at yaw 0)', s2.player.pos.x > s.player.pos.x + 0.8, `dx ${(s2.player.pos.x - s.player.pos.x).toFixed(2)} m`)
+  await page.mouse.down()
+  await waitTicks(10)
+  await page.mouse.up()
+  check('weapons stay holstered in the hub (no shots)', (await state()).player.ammo === 15)
+
+  // 4. Walk up to the mission board, press E, deploy from the board.
+  await page.evaluate(() => window.__sfl.teleport(-14.2, 0.3))
+  await waitTicks(6)
+  check('standing at the mission board shows the E prompt', (await state()).station === 'board' && (await visible('Mission board')))
+  await page.keyboard.press('KeyE')
+  check('E opens the mission board', await visible('Choose a mission'))
+  await page.screenshot({ path: join(shots, '02-board.png') })
+  await page.locator('button.deploy').click()
+  await sleep(600)
+  s = await state()
+  check('Deploy starts Hold Block 7 in Dolly', s.status === 'playing' && s.map === 'dolly-block-7' && s.missionId === 'dolly-hold-block-7', `status=${s.status} map=${s.map}`)
+  await page.evaluate(() => {
+    window.__sfl.setInput({})
+    window.__sfl.holdWaves()
+  })
 
   // 4. Aim and fire at a zombie until it dies.
   const zid = await page.evaluate(() => window.__sfl.spawnAhead(9))
@@ -200,14 +218,14 @@ try {
   await page.evaluate(() => window.__sfl.killPlayer())
   // Generous wall-clock limit: software rendering here can drop to ~1 fps, and the game slows below 10 fps.
   const dead = await waitFor((st) => st.status === 'dead', 90000)
-  const deathUi = await visible('Restart encounter')
+  const deathUi = await visible('Retry mission')
   check('player death shows the death screen', !!dead && deathUi, `status ${dead ? dead.status : (await state()).status}, screen ${deathUi ? 'visible' : 'missing'}`)
   await page.screenshot({ path: join(shots, '05-dead.png') })
-  await page.locator('button', { hasText: 'Restart encounter' }).click()
+  await page.locator('button', { hasText: 'Retry mission' }).click()
   await sleep(500)
   s = await state()
   check(
-    'Restart encounter resets health, ammo, zombies and waves',
+    'Retry mission resets health, ammo, zombies and waves',
     s.status === 'playing' && s.player.health === 100 && s.player.ammo === 15 && s.zombies.length === 0 && s.encounter.phase === 'warmup',
     `status=${s.status} hp=${s.player.health} ammo=${s.player.ammo} zombies=${s.zombies.length} phase=${s.encounter.phase}`,
   )
@@ -233,6 +251,19 @@ try {
   await page.locator('button', { hasText: 'Resume' }).click()
   await sleep(400)
   check('resume returns to play', (await state()).status === 'playing')
+
+  // 11. Clear the mission through the real state machine, then return to The Ville.
+  await page.evaluate(() => window.__sfl.finishEncounter())
+  const cleared = await waitFor((st) => st.status === 'cleared')
+  check('clearing the last wave shows Mission complete', !!cleared && (await visible('Return to The Ville')))
+  await page.screenshot({ path: join(shots, '08-complete.png') })
+  await page.locator('button', { hasText: 'Return to The Ville' }).click()
+  await sleep(600)
+  s = await state()
+  check('Return to The Ville goes back to the hub', s.status === 'hub' && s.map === 'the-ville' && s.missionId === null, `status=${s.status} map=${s.map}`)
+  const prof = await page.evaluate(() => window.__sfl.profile())
+  const rec = prof.missions['dolly-hold-block-7']
+  check('the profile recorded the death and the clear', rec && rec.clears === 1 && rec.attempts === 2 && prof.stats.deaths === 1, JSON.stringify(rec))
 
   s = await state()
   check('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '))

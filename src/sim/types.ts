@@ -53,6 +53,8 @@ export interface MapLight {
   intensity: number
   /** false = glowing fixture and light pool only, no real light (cheaper). Defaults to true. */
   dynamic?: boolean
+  /** false = wall-mounted fixture, no lamp post. Defaults to true. */
+  pole?: boolean
 }
 
 export interface MapTheme {

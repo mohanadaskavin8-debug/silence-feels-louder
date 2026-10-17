@@ -32,6 +32,8 @@ export class InputController {
   private recoilPitch = 0
   private lockFailed = false
   private lockFailures = 0
+  /** When the lock was last released; browsers refuse re-locks for ~1 s after that. */
+  private lastUnlock = -1e9
   private canvas: HTMLCanvasElement | null = null
   /** Scripted override used by automated tests (window.__sfl). */
   scripted: Partial<PlayerInput> | null = null
@@ -75,7 +77,7 @@ export class InputController {
 
   requestLock() {
     const c = this.canvas
-    if (!c || this.locked || this.lockFailed) return
+    if (!c || this.locked) return
     if (typeof c.requestPointerLock !== 'function') {
       this.lockFailed = true
       this.onLockChange(false, 'error')
@@ -83,9 +85,8 @@ export class InputController {
     }
     try {
       const r = c.requestPointerLock() as unknown
-      if (r && typeof (r as Promise<void>).catch === 'function') {
-        ;(r as Promise<void>).catch(() => this.onLockError())
-      }
+      // The pointerlockerror event reports a refusal; swallow the promise so it isn't counted twice.
+      if (r && typeof (r as Promise<void>).catch === 'function') (r as Promise<void>).catch(() => {})
     } catch {
       this.onLockError()
     }
@@ -144,7 +145,8 @@ export class InputController {
   }
 
   private onKeyDown = (e: KeyboardEvent) => {
-    if (e.code === 'Tab') e.preventDefault()
+    // Tab only belongs to the game during play; in menus it must move focus.
+    if (e.code === 'Tab' && this.enabled) e.preventDefault()
     if (e.repeat) return
     this.keys.add(e.code)
     if (!this.enabled) return
@@ -152,10 +154,8 @@ export class InputController {
     if (e.code === 'KeyV' || e.code === 'KeyQ') this.meleeLatch = true
     if (e.code === 'KeyM') this.onToggleMute()
     if (e.code === 'KeyE' || e.code === 'KeyF') this.onInteract()
-    if (e.code === 'Escape' || e.code === 'KeyP') {
-      // With pointer lock, Esc is eaten by the browser and arrives as a lock change instead.
-      if (!this.locked) this.onPause()
-    }
+    // With pointer lock, Esc is eaten by the browser and arrives as a lock change instead; P always works.
+    if (e.code === 'KeyP' || (e.code === 'Escape' && !this.locked)) this.onPause()
   }
 
   private onKeyUp = (e: KeyboardEvent) => {
@@ -200,8 +200,11 @@ export class InputController {
 
   private onLockChangeEvt = () => {
     const locked = this.locked
-    if (locked) this.lockFailures = 0
-    else {
+    if (locked) {
+      this.lockFailures = 0
+      this.lockFailed = false
+    } else {
+      this.lastUnlock = performance.now()
       this.fire = false
       this.aim = false
     }
@@ -211,7 +214,8 @@ export class InputController {
   private onLockError = () => {
     // Browsers refuse a re-lock for ~1 s after the user presses Esc, so one refusal is
     // not proof the embed blocks pointer lock. Fall back to free look after repeated refusals.
-    this.lockFailures++
+    // A refusal inside the post-unlock cooldown says nothing about the embed, so it doesn't count.
+    if (performance.now() - this.lastUnlock > 1500) this.lockFailures++
     if (this.lockFailures >= 3) this.lockFailed = true
     this.onLockChange(false, 'error')
   }
