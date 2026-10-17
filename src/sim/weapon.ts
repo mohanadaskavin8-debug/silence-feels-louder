@@ -1,15 +1,15 @@
-import { HEAD_DROP, HEAD_RADIUS, ZOMBIES } from '../data/enemies'
 import { getWeapon } from '../data/weapons'
 import { bodyDepth, cameraRig } from './camera'
 import type { SimCtx } from './context'
 import { rayCylinder, raySphere, raycastWorld } from './collision'
 import { damageZombie } from './damage'
+import { zombieHitVolume } from './pose'
 import { forwardFromYaw, len3, madd3, norm3, rightFromYaw, rngNext, sub3, type Vec3 } from './math'
 import type { PlayerInput, PlayerState, WeaponDef, WeaponState, ZombieState } from './types'
 
 export const newWeaponState = (defId: string): WeaponState => {
   const def = getWeapon(defId)
-  return { defId, ammo: def.magSize, reserve: def.reserveMax, cooldown: 0, reloadLeft: 0, bloom: 0, triggerHeld: false }
+  return { defId, ammo: def.magSize, reserve: def.reserveMax, cooldown: 0, reloadLeft: 0, bloom: 0, triggerHeld: false, buffer: 0 }
 }
 
 /** Current cone half-angle for a player's weapon (what the crosshair shows). */
@@ -25,7 +25,8 @@ export function currentSpread(p: PlayerState): number {
 export function muzzlePos(p: PlayerState): Vec3 {
   const f = forwardFromYaw(p.facing)
   const r = rightFromYaw(p.facing)
-  return { x: p.pos.x + f.x * 0.62 + r.x * 0.2, y: p.pos.y + 1.38, z: p.pos.z + f.z * 0.62 + r.z * 0.2 }
+  // The pistol comes up to shoulder height when aimed.
+  return { x: p.pos.x + f.x * 0.62 + r.x * 0.2, y: p.pos.y + 1.38 + 0.1 * p.aimBlend, z: p.pos.z + f.z * 0.62 + r.z * 0.2 }
 }
 
 export function startReload(ctx: SimCtx, p: PlayerState, def: WeaponDef): boolean {
@@ -55,9 +56,14 @@ export function updateWeapon(ctx: SimCtx, p: PlayerState, input: PlayerInput, dt
     startReload(ctx, p, def)
   }
 
-  const pull = input.fire && (def.automatic || !w.triggerHeld)
+  // Semi-auto: a fresh press is queued briefly, so a click during the cycle (or the last moment of
+  // a reload) fires as soon as the gun is ready instead of being silently dropped. Holding never repeats.
+  const pressed = input.fire && !w.triggerHeld
   w.triggerHeld = input.fire
-  if (!pull || w.reloadLeft > 0 || w.cooldown > 0) return
+  w.buffer = pressed ? TRIGGER_BUFFER : Math.max(0, w.buffer - dt)
+  const wants = def.automatic ? input.fire : w.buffer > 0
+  if (!wants || w.reloadLeft > 0 || w.cooldown > 0) return
+  w.buffer = 0
 
   if (w.ammo <= 0) {
     ctx.events.push({ type: 'dryFire', playerId: p.id })
@@ -76,6 +82,10 @@ export function updateWeapon(ctx: SimCtx, p: PlayerState, input: PlayerInput, dt
   w.bloom = Math.min(def.spreadMax, w.bloom + def.spreadPerShot)
 }
 
+const TRIGGER_BUFFER = 0.2
+/** The muzzle check only catches cover hugging the gun; beyond this the camera's view wins. */
+const MUZZLE_CHECK = 1.2
+
 interface ZombieTrace {
   t: number
   zombie: ZombieState
@@ -86,14 +96,12 @@ function traceZombies(ctx: SimCtx, origin: Vec3, dir: Vec3, maxT: number): Zombi
   let best: ZombieTrace | null = null
   for (const z of ctx.state.zombies) {
     if (z.mode === 'dead') continue
-    const arch = ZOMBIES[z.archetype]
-    // Rising zombies are partly underground; shrink their volume to match the animation.
-    const rise = z.mode === 'rising' ? Math.min(1, z.modeTime / 1.1) : 1
-    const top = arch.height * (0.35 + 0.65 * rise)
-    const limit = best ? best.t : maxT
-    const head = { x: z.pos.x, y: top - HEAD_DROP, z: z.pos.z }
-    const th = raySphere(origin, dir, head, HEAD_RADIUS, limit)
-    const tb = rayCylinder(origin, dir, z.pos, arch.radius, 0, top - HEAD_DROP - HEAD_RADIUS * 0.6, limit)
+    // Volumes follow the drawn pose: lean, scale and the climb out of the ground.
+    const v = zombieHitVolume(z)
+    if (v.bodyTop <= 0) continue
+    const limit: number = best ? best.t : maxT
+    const th: number = v.head.y > 0 ? raySphere(origin, dir, v.head, v.headRadius, limit) : -1
+    const tb: number = rayCylinder(origin, dir, v.body, v.bodyRadius, 0, v.bodyTop, limit)
     if (th >= 0 && (tb < 0 || th <= tb + 0.05)) best = { t: th, zombie: z, headshot: true }
     else if (tb >= 0) best = { t: tb, zombie: z, headshot: false }
   }
@@ -144,25 +152,35 @@ function fireShot(ctx: SimCtx, p: PlayerState, input: PlayerInput, def: WeaponDe
       hit = 'none'
     }
 
-    // The gun, not the camera, has to see the target: a wall hugging the muzzle eats the bullet.
+    // The gun, not just the camera, has to see the target: cover hugging the muzzle eats the
+    // bullet, and a zombie clawing at the gun takes it before anything behind it does.
+    let target = zt
     const toEnd = sub3(end, muzzle)
     const dist = len3(toEnd)
     if (dist > 0.05) {
-      const block = raycastWorld(ctx.map, muzzle, norm3(toEnd), dist - 0.05)
-      if (block) {
-        end = madd3(muzzle, norm3(toEnd), block.t)
+      const n = norm3(toEnd)
+      const block = raycastWorld(ctx.map, muzzle, n, Math.min(dist - 0.05, MUZZLE_CHECK))
+      const near = traceZombies(ctx, muzzle, n, block ? block.t : dist - 0.05)
+      if (near && near.zombie !== zt?.zombie) {
+        target = near
+        end = madd3(muzzle, n, near.t)
+        hit = 'zombie'
+        normal = null
+      } else if (block) {
+        target = null
+        end = madd3(muzzle, n, block.t)
         hit = 'world'
         normal = block.normal
       }
     }
 
-    if (hit === 'zombie' && zt) {
+    if (hit === 'zombie' && target) {
       anyHit = true
       const flat = norm3({ x: dir.x, y: 0, z: dir.z })
-      damageZombie(ctx, zt.zombie, {
+      damageZombie(ctx, target.zombie, {
         playerId: p.id,
-        damage: def.damage * (zt.headshot ? def.headshotMultiplier : 1),
-        headshot: zt.headshot,
+        damage: def.damage * (target.headshot ? def.headshotMultiplier : 1),
+        headshot: target.headshot,
         dir: flat,
         knockback: def.knockback,
         staggerChance: def.staggerChance,

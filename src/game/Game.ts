@@ -177,7 +177,9 @@ export class Game {
 
   private frame = (ts: number) => {
     this.raf = requestAnimationFrame(this.frame)
-    const dt = Math.min(0.1, Math.max(0, (ts - this.last) / 1000))
+    const realDt = Math.max(0, (ts - this.last) / 1000)
+    // Cap the step so a stall (tab switch, GC) doesn't fast-forward the fight; below ~10 fps the game slows down instead.
+    const dt = Math.min(0.1, realDt)
     this.last = ts
     this.clock += dt
     this.input.update(dt)
@@ -214,7 +216,7 @@ export class Game {
     this.draw(alpha, dt)
 
     this.fpsFrames++
-    this.fpsTime += dt
+    this.fpsTime += realDt
     if (this.fpsTime >= 0.5) {
       this.fps = Math.round(this.fpsFrames / this.fpsTime)
       this.fpsFrames = 0
@@ -449,6 +451,13 @@ export class Game {
             resolve({ mean, std: Math.sqrt(Math.max(0, sq / n - mean * mean)), w: canvas.width, h: canvas.height })
           })
         }),
+      /** Draw calls / triangles of the last frame and the map baking result. */
+      renderInfo: () => {
+        const r = this.renderer
+        if (!r) return null
+        const i = r.renderer.info
+        return { calls: i.render.calls, triangles: i.render.triangles, programs: i.programs?.length ?? 0, map: r.mapDraws }
+      },
       start: () => this.start(),
       restart: () => this.restart(),
       pause: () => this.pause(),

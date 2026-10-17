@@ -55,7 +55,8 @@ const browser = await chromium.launch({
   executablePath: existsSync(exe) ? exe : undefined,
   args: ['--no-sandbox', '--use-gl=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--autoplay-policy=no-user-gesture-required'],
 })
-const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
+// Smaller viewport: software WebGL is fill-bound, and this test checks behaviour, not looks.
+const page = await browser.newPage({ viewport: { width: 960, height: 540 } })
 const errors = []
 page.on('console', (m) => {
   if (m.type() === 'error') errors.push(m.text())
@@ -81,7 +82,7 @@ const visible = async (text, timeout = 4000) => {
     return false
   }
 }
-const waitFor = async (pred, timeout = 15000, step = 100) => {
+const waitFor = async (pred, timeout = 120000, step = 100) => {
   const t0 = Date.now()
   for (;;) {
     const s = await state()
@@ -173,7 +174,7 @@ try {
 
   // 6. A zombie reaches the player and hurts them; HUD health reflects it.
   await page.evaluate(() => window.__sfl.spawnAhead(2.2))
-  const hurt = await waitFor((st) => st.player.health < 100, 6000)
+  const hurt = await waitFor((st) => st.player.health < 100, 120000)
   check('zombie attacks reduce player health', !!hurt, hurt ? `health ${hurt.player.health.toFixed(0)}` : 'no damage taken')
   await sleep(200)
   const hudHealth = await page.locator('.health-num').innerText()
@@ -197,7 +198,8 @@ try {
 
   // 8. Death -> death screen -> restart restores a fresh encounter.
   await page.evaluate(() => window.__sfl.killPlayer())
-  const dead = await waitFor((st) => st.status === 'dead', 15000)
+  // Generous wall-clock limit: software rendering here can drop to ~1 fps, and the game slows below 10 fps.
+  const dead = await waitFor((st) => st.status === 'dead', 90000)
   const deathUi = await visible('Restart encounter')
   check('player death shows the death screen', !!dead && deathUi, `status ${dead ? dead.status : (await state()).status}, screen ${deathUi ? 'visible' : 'missing'}`)
   await page.screenshot({ path: join(shots, '05-dead.png') })
@@ -215,7 +217,7 @@ try {
     window.__sfl.holdWaves(false)
     window.__sfl.setInput({})
   })
-  const spawned = await waitFor((st) => st.encounter.phase === 'wave' && st.zombies.length > 0, 30000)
+  const spawned = await waitFor((st) => st.encounter.phase === 'wave' && st.zombies.length > 0, 120000)
   check('wave 1 starts and zombies spawn from the alleys', !!spawned, spawned ? `${spawned.zombies.length} zombies` : '')
   await waitTicks(240)
   await page.screenshot({ path: join(shots, '06-wave.png') })
@@ -234,7 +236,7 @@ try {
 
   s = await state()
   check('no console errors', errors.length === 0, errors.slice(0, 3).join(' | '))
-  console.log(`\ninfo: software-rendered fps in this container ≈ ${s.fps} (not representative of a real GPU)`)
+  console.log(`\ninfo: software-rendered fps in this container ≈ ${s.fps} real frames/s (not representative of a real GPU)`)
 } catch (err) {
   check('smoke run completed without exceptions', false, String(err && err.stack ? err.stack : err))
 } finally {

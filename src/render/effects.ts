@@ -53,6 +53,7 @@ class ParticlePool {
   readonly points: THREE.Points
   private pos: Float32Array
   private col: Float32Array
+  private alpha: Float32Array
   private size: Float32Array
   private vel: Float32Array
   private life: Float32Array
@@ -67,6 +68,7 @@ class ParticlePool {
     const n = MAX_PARTICLES
     this.pos = new Float32Array(n * 3)
     this.col = new Float32Array(n * 3)
+    this.alpha = new Float32Array(n)
     this.size = new Float32Array(n)
     this.vel = new Float32Array(n * 3)
     this.life = new Float32Array(n)
@@ -80,14 +82,18 @@ class ParticlePool {
     geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3).setUsage(THREE.DynamicDrawUsage))
     geo.setAttribute('color', new THREE.BufferAttribute(this.col, 3).setUsage(THREE.DynamicDrawUsage))
     geo.setAttribute('size', new THREE.BufferAttribute(this.size, 1).setUsage(THREE.DynamicDrawUsage))
+    geo.setAttribute('alpha', new THREE.BufferAttribute(this.alpha, 1).setUsage(THREE.DynamicDrawUsage))
     const mat = new THREE.ShaderMaterial({
       uniforms: { map: { value: texture }, scale: { value: 600 } },
       vertexShader: /* glsl */ `
         attribute float size;
+        attribute float alpha;
         varying vec3 vColor;
+        varying float vAlpha;
         uniform float scale;
         void main() {
           vColor = color;
+          vAlpha = alpha;
           vec4 mv = modelViewMatrix * vec4(position, 1.0);
           gl_PointSize = size * scale / max(0.1, -mv.z);
           gl_Position = projectionMatrix * mv;
@@ -95,10 +101,14 @@ class ParticlePool {
       fragmentShader: /* glsl */ `
         uniform sampler2D map;
         varying vec3 vColor;
+        varying float vAlpha;
         void main() {
           vec4 t = texture2D(map, gl_PointCoord);
-          if (t.a < 0.02) discard;
-          gl_FragColor = vec4(vColor * t.rgb, t.a);
+          float a = t.a * vAlpha;
+          if (a < 0.02) discard;
+          gl_FragColor = vec4(vColor * t.rgb, a);
+          #include <tonemapping_fragment>
+          #include <colorspace_fragment>
         }`,
       vertexColors: true,
       transparent: true,
@@ -123,6 +133,7 @@ class ParticlePool {
     this.col.set([color.r, color.g, color.b], i * 3)
     this.baseSize[i] = size
     this.size[i] = size
+    this.alpha[i] = 1
     this.life[i] = life
     this.maxLife[i] = life
     this.gravity[i] = gravity
@@ -137,6 +148,7 @@ class ParticlePool {
       if (this.life[i] <= 0) {
         this.pos[k + 1] = -999
         this.size[i] = 0
+        this.alpha[i] = 0
         continue
       }
       const d = Math.max(0, 1 - this.drag[i] * dt)
@@ -152,6 +164,8 @@ class ParticlePool {
       }
       const t = this.life[i] / this.maxLife[i]
       const fade = this.fadeColor ? t : 1
+      // Smoke and mist thin out instead of popping; a quick fade-in avoids hard spawns.
+      this.alpha[i] = Math.min(1, t * 2.2) * Math.min(1, (1 - t) * 12 + 0.25)
       this.col[k] = this.baseCol[k] * fade
       this.col[k + 1] = this.baseCol[k + 1] * fade
       this.col[k + 2] = this.baseCol[k + 2] * fade
@@ -162,6 +176,7 @@ class ParticlePool {
     g.attributes.position.needsUpdate = true
     g.attributes.color.needsUpdate = true
     g.attributes.size.needsUpdate = true
+    g.attributes.alpha.needsUpdate = true
   }
 
   dispose() {
@@ -184,8 +199,9 @@ export class Effects {
   private flash: THREE.Sprite
   private flashLight: THREE.PointLight
   private flashLife = 0
-  private decals: THREE.Mesh[] = []
+  private decals: THREE.InstancedMesh
   private decalNext = 0
+  private decalObj = new THREE.Object3D()
   private textures: THREE.Texture[] = []
   private tmpColor = new THREE.Color()
 
@@ -218,12 +234,27 @@ export class Effects {
     const holeTex = dotTexture(false)
     this.textures.push(holeTex)
     const holeMat = new THREE.MeshBasicMaterial({ map: holeTex, color: 0x050505, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 })
-    const holeGeo = new THREE.PlaneGeometry(0.09, 0.09)
-    for (let i = 0; i < MAX_DECALS; i++) {
-      const d = new THREE.Mesh(holeGeo, holeMat)
-      d.visible = false
-      this.group.add(d)
-      this.decals.push(d)
+    // All bullet holes in one instanced draw; unused slots are scaled to zero.
+    this.decals = new THREE.InstancedMesh(new THREE.PlaneGeometry(0.09, 0.09), holeMat, MAX_DECALS)
+    this.decals.instanceMatrix.setUsage(THREE.DynamicDrawUsage)
+    this.decals.frustumCulled = false
+    this.clearDecals()
+    this.group.add(this.decals)
+  }
+
+  private clearDecals() {
+    const zero = new THREE.Matrix4().makeScale(0, 0, 0)
+    for (let i = 0; i < MAX_DECALS; i++) this.decals.setMatrixAt(i, zero)
+    this.decals.instanceMatrix.needsUpdate = true
+  }
+
+  /** Make every pooled effect drawable for one compile pass, so first use never stalls on a shader compile. */
+  warmup(): () => void {
+    this.flash.visible = true
+    this.tracers[0].mesh.visible = true
+    return () => {
+      this.flash.visible = false
+      this.tracers[0].mesh.visible = false
     }
   }
 
@@ -331,13 +362,15 @@ export class Effects {
   }
 
   private decal(at: Vec3, normal: Vec3) {
-    const d = this.decals[this.decalNext]
-    this.decalNext = (this.decalNext + 1) % MAX_DECALS
+    const d = this.decalObj
     d.position.set(at.x + normal.x * 0.01, at.y + normal.y * 0.01, at.z + normal.z * 0.01)
     d.lookAt(at.x + normal.x, at.y + normal.y, at.z + normal.z)
     d.rotateZ(Math.random() * Math.PI)
     d.scale.setScalar(0.7 + Math.random() * 0.6)
-    d.visible = true
+    d.updateMatrix()
+    this.decals.setMatrixAt(this.decalNext, d.matrix)
+    this.decals.instanceMatrix.needsUpdate = true
+    this.decalNext = (this.decalNext + 1) % MAX_DECALS
   }
 
   update(dt: number) {
@@ -360,7 +393,7 @@ export class Effects {
   }
 
   clear() {
-    for (const d of this.decals) d.visible = false
+    this.clearDecals()
     for (const t of this.tracers) {
       t.life = 0
       t.mesh.visible = false

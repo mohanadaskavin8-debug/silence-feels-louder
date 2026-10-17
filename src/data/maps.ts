@@ -68,16 +68,23 @@ export const DOLLY_BLOCK_7: MapDef = {
     box('crate', 18, 19.6, -15, -13.4, 1.4),
     box('fence', -28, -19, 13, 13.15, 2.3, { blocksShots: false }),
   ],
+  markings: [
+    // parking bays along the north side
+    ...Array.from({ length: 9 }, (_, i) => ({ x: -20 + i * 2.6, z: -18, w: 0.12, d: 4.6 })),
+    // lane dashes down the west side
+    ...Array.from({ length: 11 }, (_, i) => ({ x: -23, z: -24 + i * 4.5, w: 0.15, d: 2.2 })),
+  ],
   lights: [
     { x: -20, z: -12, height: 6, color: 0xffa860, intensity: 70 },
     { x: 20, z: -12, height: 6, color: 0xffa860, intensity: 70 },
     { x: -13, z: 15, height: 6, color: 0xffa860, intensity: 64 },
     { x: 14, z: 16, height: 6, color: 0xffa860, intensity: 64 },
     { x: 0, z: -6.2, height: 3.4, color: 0xa9c8ff, intensity: 26 },
-    { x: -12, z: -26.5, height: 4.5, color: 0xff8f4a, intensity: 30 },
-    { x: 10, z: -26.5, height: 4.5, color: 0xff8f4a, intensity: 30 },
-    { x: -33, z: -4, height: 4.5, color: 0xff8f4a, intensity: 26 },
-    { x: 33, z: 6, height: 4.5, color: 0xff8f4a, intensity: 26 },
+    // Alley lamps: fixtures and light pools only. Real lights stay few so every lit pixel stays cheap.
+    { x: -12, z: -26.5, height: 4.5, color: 0xff8f4a, intensity: 30, dynamic: false },
+    { x: 10, z: -26.5, height: 4.5, color: 0xff8f4a, intensity: 30, dynamic: false },
+    { x: -33, z: -4, height: 4.5, color: 0xff8f4a, intensity: 26, dynamic: false },
+    { x: 33, z: 6, height: 4.5, color: 0xff8f4a, intensity: 26, dynamic: false },
   ],
   theme: {
     fog: 0x12141a,
@@ -91,8 +98,80 @@ export const DOLLY_BLOCK_7: MapDef = {
   },
 }
 
+/**
+ * The Ville — the crew's home block and the persistent safe hub. Walk between the armory,
+ * the mission board and the squad lobby; nothing hostile spawns here.
+ */
+export const THE_VILLE: MapDef = {
+  id: 'the-ville',
+  name: 'The Ville',
+  district: 'Home',
+  halfX: 24,
+  halfZ: 20,
+  safe: true,
+  playerSpawns: [
+    { x: 0, z: 7, yaw: 0 },
+    { x: -2, z: 8.5, yaw: 0 },
+    { x: 2, z: 8.5, yaw: 0 },
+    { x: 0, z: 10, yaw: 0 },
+  ],
+  zombieSpawns: [],
+  obstacles: [
+    // north row: armory between two blocks
+    box('building', -24, -7, -20, -13, 12, { variant: 2 }),
+    box('shop', -7, 7, -20, -13, 5, { label: 'ARMORY  ·  GUNSMITH' }),
+    box('building', 7, 24, -20, -13, 14, { variant: 5 }),
+    // south row: garage (vehicles arrive in Milestone 4) between blocks
+    box('building', -24, -7, 13, 20, 10, { variant: 3 }),
+    box('garage', -7, 7, 13, 20, 6, { label: 'GARAGE' }),
+    box('building', 7, 24, 13, 20, 11, { variant: 0 }),
+    // west and east blocks
+    box('building', -24, -17, -13, 13, 11, { variant: 7 }),
+    box('building', 17, 24, -13, 13, 13, { variant: 9 }),
+    // the mission board on the west wall
+    box('board', -17, -16.7, -3, 3, 3.2, { label: 'MISSIONS' }),
+    // squad lobby benches (east)
+    box('bench', 11, 14, 9.2, 9.9, 0.5),
+    box('bench', 15.4, 16.1, 3, 7, 0.5),
+    box('crate', 13.2, 14.2, 5.2, 6.2, 0.8),
+    // plaza
+    box('wall', -4, 4, -2.3, -1.7, 0.9),
+    box('car', -13.6, -11.8, 6, 10.4, 1.45, { variant: 4 }),
+    box('dumpster', 15.2, 17, -12.9, -11.9, 1.35),
+  ],
+  lights: [
+    { x: -9, z: -8, height: 6, color: 0xffa860, intensity: 60 },
+    { x: 9, z: -8, height: 6, color: 0xffa860, intensity: 60 },
+    { x: -9, z: 9, height: 6, color: 0xffa860, intensity: 55 },
+    { x: 12, z: 4, height: 3.2, color: 0xd9c7ff, intensity: 22 },
+    { x: -15.4, z: 0, height: 3.6, color: 0xfff1d6, intensity: 18 },
+  ],
+  markings: [
+    // a faded half court in the plaza
+    { x: 0, z: 4, w: 12, d: 0.12 },
+    { x: -6, z: 0.5, w: 0.12, d: 7 },
+    { x: 6, z: 0.5, w: 0.12, d: 7 },
+  ],
+  stations: [
+    { id: 'board', kind: 'mission-board', label: 'Mission board', x: -15.4, z: 0, radius: 2.4 },
+    { id: 'armory', kind: 'armory', label: 'Armory & Gunsmith', x: 0, z: -11.4, radius: 2.4 },
+    { id: 'squad', kind: 'squad', label: 'Squad lobby', x: 12.4, z: 6.6, radius: 2.6 },
+  ],
+  theme: {
+    fog: 0x15151a,
+    fogDensity: 0.018,
+    sky: 0x0c0d12,
+    ground: 0x1d1d20,
+    moon: 0xb2c0dc,
+    moonIntensity: 1.6,
+    ambient: 0x6d7590,
+    ambientIntensity: 1.6,
+  },
+}
+
 export const MAPS: Record<string, MapDef> = {
   [DOLLY_BLOCK_7.id]: DOLLY_BLOCK_7,
+  [THE_VILLE.id]: THE_VILLE,
 }
 
 export const getMap = (id: string): MapDef => {
@@ -102,6 +181,8 @@ export const getMap = (id: string): MapDef => {
 }
 
 export const ENCOUNTERS: Record<string, EncounterDef> = {
+  // The hub never spawns anything.
+  'hub-idle': { id: 'hub-idle', name: 'The Ville', warmup: Infinity, intermission: 0, waves: [] },
   'dolly-test': {
     id: 'dolly-test',
     name: 'Test Encounter — Hold Block 7',

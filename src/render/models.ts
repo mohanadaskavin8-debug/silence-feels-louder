@@ -42,6 +42,25 @@ const sphere = (r: number) => cachedGeo(`sph${r}`, () => new THREE.SphereGeometr
 
 const fabric = (color: number, rough = 0.92) => new THREE.MeshStandardMaterial({ color, roughness: rough, metalness: 0 })
 
+// Shared, never-disposed materials for parts that look the same on everyone. Keeping them
+// alive also keeps their shader programs compiled, so a wave start never hitches on a recompile.
+const shared = {
+  eyeGlow: new Map<number, THREE.MeshBasicMaterial>(),
+  lens: new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.15, metalness: 0.6 }),
+  gunMetal: new THREE.MeshStandardMaterial({ color: 0x1a1b1d, roughness: 0.45, metalness: 0.7 }),
+  gunPolymer: new THREE.MeshStandardMaterial({ color: 0x222224, roughness: 0.8, metalness: 0.1 }),
+}
+const eyeGlowMat = (color: number) => {
+  let m = shared.eyeGlow.get(color)
+  if (!m) {
+    m = new THREE.MeshBasicMaterial({ color })
+    shared.eyeGlow.set(color, m)
+  }
+  return m
+}
+/** Parts smaller than this don't cast shadows (hands, eyes, zip, cuffs...): ~10 fewer shadow draws per figure. */
+const SHADOW_MIN_RADIUS = 0.1
+
 function mesh(geo: THREE.BufferGeometry, mat: THREE.Material, x = 0, y = 0, z = 0): THREE.Mesh {
   const m = new THREE.Mesh(geo, mat)
   m.position.set(x, y, z)
@@ -100,7 +119,7 @@ export function buildHumanoid(opts: HumanoidOptions): HumanoidRig {
     const slit = mesh(boxG(0.17, 0.035, 0.03), mats.skin, 0, 0.125, -0.108)
     head.add(slit)
     if (opts.eyeGlow != null) {
-      const glow = new THREE.MeshBasicMaterial({ color: opts.eyeGlow })
+      const glow = eyeGlowMat(opts.eyeGlow)
       head.add(mesh(boxG(0.03, 0.014, 0.01), glow, -0.04, 0.125, -0.124))
       head.add(mesh(boxG(0.03, 0.014, 0.01), glow, 0.04, 0.125, -0.124))
     }
@@ -118,7 +137,7 @@ export function buildHumanoid(opts: HumanoidOptions): HumanoidRig {
     head.children[0].position.z = -0.025
   }
   if (o.glasses) {
-    const lens = new THREE.MeshStandardMaterial({ color: 0x050506, roughness: 0.15, metalness: 0.6 })
+    const lens = shared.lens
     head.add(mesh(boxG(0.075, 0.04, 0.012), lens, -0.045, 0.125, -0.14))
     head.add(mesh(boxG(0.075, 0.04, 0.012), lens, 0.045, 0.125, -0.14))
     head.add(mesh(boxG(0.03, 0.01, 0.01), lens, 0, 0.13, -0.142))
@@ -160,6 +179,12 @@ export function buildHumanoid(opts: HumanoidOptions): HumanoidRig {
   }
 
   if (opts.scale && opts.scale !== 1) root.scale.setScalar(opts.scale)
+  root.traverse((obj) => {
+    const m = obj as THREE.Mesh
+    if (!m.isMesh) return
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere()
+    if (m.geometry.boundingSphere!.radius < SHADOW_MIN_RADIUS) m.castShadow = false
+  })
 
   const owned = Object.values(mats).filter(Boolean) as THREE.Material[]
   return {
@@ -179,20 +204,16 @@ export function buildHumanoid(opts: HumanoidOptions): HumanoidRig {
     handR: R.hand,
     flashMats,
     dispose() {
-      // Geometries are cached and shared; only per-instance materials are freed.
+      // Geometries are cached and shared materials live forever; only per-instance materials are freed.
       for (const m of owned) m.dispose()
-      root.traverse((obj) => {
-        const mm = (obj as THREE.Mesh).material as THREE.Material | undefined
-        if (mm && !owned.includes(mm) && mm instanceof THREE.MeshBasicMaterial) mm.dispose()
-      })
     },
   }
 }
 
 /** Placeholder pistol. Barrel points along the hand's -Y axis (down the forearm). Returns the muzzle anchor. */
 export function buildPistol(hand: THREE.Group): THREE.Object3D {
-  const metal = new THREE.MeshStandardMaterial({ color: 0x1a1b1d, roughness: 0.45, metalness: 0.7 })
-  const polymer = new THREE.MeshStandardMaterial({ color: 0x222224, roughness: 0.8, metalness: 0.1 })
+  const metal = shared.gunMetal
+  const polymer = shared.gunPolymer
   const gun = new THREE.Group()
   // Build pointing -Z, then rotate so -Z maps to the hand's -Y.
   gun.add(mesh(boxG(0.034, 0.042, 0.19), metal, 0, 0.03, -0.06)) // slide

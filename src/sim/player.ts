@@ -1,7 +1,7 @@
 import { getCharacter } from '../data/characters'
 import { PITCH_MAX, PITCH_MIN } from './camera'
-import { resolveCircle } from './collision'
 import { PLAYER_RADIUS, type SimCtx } from './context'
+import { resolveCircle, walkableLine } from './collision'
 import { damageZombie } from './damage'
 import { approach, approachAngle, clamp, forwardFromYaw, rightFromYaw, wrapAngle, yawFromDir } from './math'
 import type { PlayerInput, PlayerState } from './types'
@@ -12,7 +12,8 @@ const DECEL = 26
 const AIM_RATE = 1 / 0.16
 const REGEN_DELAY = 5
 const REGEN_RATE = 9
-export const MELEE = { range: 1.75, arc: Math.PI / 3, damage: 25, knockback: 5.5, cooldown: 0.7 }
+// Cooldown is longer than stagger + attack windup, so shoving buys time but can't stunlock a zombie.
+export const MELEE = { range: 1.75, arc: Math.PI / 3, damage: 25, knockback: 5.5, cooldown: 1.0 }
 
 export function newPlayer(id: string, characterId: string, weaponId: string, x: number, z: number, yaw: number): PlayerState {
   const c = getCharacter(characterId)
@@ -66,6 +67,11 @@ export function updatePlayer(ctx: SimCtx, p: PlayerState, raw: PlayerInput, dt: 
     mx /= ml
     mz /= ml
   }
+  // Combat first, from the pose the player saw last frame: firing after moving would trace the
+  // shot from a camera one tick ahead of the one drawn on screen.
+  if (input.melee && p.meleeCooldown <= 0 && !reloading) doMelee(ctx, p)
+  updateWeapon(ctx, p, input, dt)
+
   const f = forwardFromYaw(p.yaw)
   const r = rightFromYaw(p.yaw)
   const speed = wantsAim ? c.speedAim : p.sprinting ? c.speedSprint : reloading ? c.speedWalk * 0.85 : c.speedWalk
@@ -75,14 +81,25 @@ export function updatePlayer(ctx: SimCtx, p: PlayerState, raw: PlayerInput, dt: 
   p.vel.x = approach(p.vel.x, tx, rate * dt)
   p.vel.z = approach(p.vel.z, tz, rate * dt)
 
-  const ox = p.pos.x
-  const oz = p.pos.z
-  p.pos.x += p.vel.x * dt
-  p.pos.z += p.vel.z * dt
+  const ex = p.pos.x + p.vel.x * dt
+  const ez = p.pos.z + p.vel.z * dt
+  p.pos.x = ex
+  p.pos.z = ez
   if (resolveCircle(ctx.map, p.pos, PLAYER_RADIUS)) {
-    // Keep only the velocity we actually achieved so we slide along walls instead of sticking.
-    p.vel.x = (p.pos.x - ox) / dt
-    p.vel.z = (p.pos.z - oz) / dt
+    // Drop only the velocity pointing into the surface, so we slide along walls. (Deriving velocity
+    // from the push-out would turn any correction into a launch.)
+    const cx = p.pos.x - ex
+    const cz = p.pos.z - ez
+    const cl = Math.hypot(cx, cz)
+    if (cl > 1e-9) {
+      const nx = cx / cl
+      const nz = cz / cl
+      const vn = p.vel.x * nx + p.vel.z * nz
+      if (vn < 0) {
+        p.vel.x -= nx * vn
+        p.vel.z -= nz * vn
+      }
+    }
   }
 
   // Facing: square up to the camera while aiming/shooting, otherwise turn toward travel.
@@ -90,9 +107,6 @@ export function updatePlayer(ctx: SimCtx, p: PlayerState, raw: PlayerInput, dt: 
   const moveSpeed = Math.hypot(p.vel.x, p.vel.z)
   if (combat) p.facing = approachAngle(p.facing, p.yaw, 16 * dt)
   else if (moveSpeed > 0.4) p.facing = approachAngle(p.facing, yawFromDir(p.vel.x, p.vel.z), 11 * dt)
-
-  if (input.melee && p.meleeCooldown <= 0 && !reloading) doMelee(ctx, p)
-  updateWeapon(ctx, p, input, dt)
 
   if (p.sinceDamage > REGEN_DELAY && p.health < p.maxHealth) {
     p.health = Math.min(p.maxHealth, p.health + REGEN_RATE * dt)
@@ -112,6 +126,7 @@ function doMelee(ctx: SimCtx, p: PlayerState) {
     if (d > MELEE.range + 0.4 || d < 1e-6) continue
     const ang = Math.abs(wrapAngle(yawFromDir(dx, dz) - p.facing))
     if (ang > MELEE.arc && d > 0.7) continue
+    if (!walkableLine(ctx.map, p.pos.x, p.pos.z, z.pos.x, z.pos.z, 0.05)) continue
     hits++
     damageZombie(ctx, z, {
       playerId: p.id,

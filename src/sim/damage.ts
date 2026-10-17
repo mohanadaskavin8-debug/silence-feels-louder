@@ -3,6 +3,9 @@ import type { SimCtx } from './context'
 import { rngNext, type Vec3 } from './math'
 import type { PlayerState, ZombieState } from './types'
 
+/** After a stagger starts, further hits can't re-stagger for this long (no melee/headshot stunlock). */
+export const STAGGER_IMMUNITY = 2.4
+
 export interface ZombieHitOpts {
   playerId: string
   damage: number
@@ -32,25 +35,36 @@ export function damageZombie(ctx: SimCtx, z: ZombieState, o: ZombieHitOpts): boo
     killed,
     melee: o.melee,
   })
-  const kb = o.knockback * arch.knockbackScale
-  z.vel.x += o.dir.x * kb
-  z.vel.z += o.dir.z * kb
   if (killed) {
     z.health = 0
     z.mode = 'dead'
     z.modeTime = 0
+    // A short stumble, not a slide across the courtyard.
+    push(z, o, arch.knockbackScale * 0.35)
     z.deathDir = { x: o.dir.x, y: 0, z: o.dir.z }
     if (shooter) shooter.kills++
     ctx.state.encounter.totalKills++
     if (ctx.state.encounter.phase === 'wave') ctx.state.encounter.killedThisWave++
     return true
   }
-  // Rising zombies finish climbing out; everything else may flinch.
-  if (z.mode !== 'rising' && (o.headshot || o.melee || rngNext(ctx.state.rng) < o.staggerChance)) {
+  // Rising zombies finish climbing out; everything else may flinch, but not chain-flinch forever.
+  // Past half its windup a swing is committed: only a headshot can still interrupt it.
+  const committed = z.mode === 'attack' && z.modeTime > arch.attackWindup * 0.5 && !o.headshot
+  const staggers =
+    z.mode !== 'rising' && !committed && z.staggerImmune <= 0 && (o.headshot || o.melee || rngNext(ctx.state.rng) < o.staggerChance)
+  if (staggers) {
     z.mode = 'stagger'
     z.modeTime = 0
+    z.staggerImmune = STAGGER_IMMUNITY
   }
+  // A hit that doesn't stagger only nudges: otherwise repeated shoves hold a zombie off forever.
+  push(z, o, arch.knockbackScale * (staggers ? 1 : 0.25))
   return false
+}
+
+function push(z: ZombieState, o: ZombieHitOpts, scale: number) {
+  z.vel.x += o.dir.x * o.knockback * scale
+  z.vel.z += o.dir.z * o.knockback * scale
 }
 
 /** Apply damage to a player. Returns true if it killed them. */

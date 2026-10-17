@@ -3,8 +3,8 @@ import { getCharacter } from '../data/characters'
 import { ZOMBIES } from '../data/enemies'
 import { cameraRig, FOV_AIM, FOV_HIP } from '../sim/camera'
 import { lerp, wrapAngle, type Vec3 } from '../sim/math'
-import type { MapDef, PlayerState, SimEvent, WorldState, ZombieState } from '../sim/types'
-import { RISE_TIME } from '../sim/zombie'
+import type { MapDef, PlayerState, SimEvent, Station, WorldState, ZombieState } from '../sim/types'
+import { riseOffset, torsoLean } from '../sim/pose'
 import { Effects } from './effects'
 import { buildMap, type MapView } from './map'
 import { buildHumanoid, buildPistol, infectedOutfit, type HumanoidRig } from './models'
@@ -24,6 +24,8 @@ interface PlayerView {
   muzzle: THREE.Object3D
   gait: number
   recoil: number
+  /** A shot fired since the last frame: snap to the aim pose before spawning its flash. */
+  fresh: boolean
   meleeT: number
   reloadT: number
 }
@@ -33,9 +35,21 @@ interface ZombieView {
   gait: number
   gaitRate: number
   flash: number
-  lean: number
   armSpread: number
+  /** Body height on the first dead frame (killed mid-climb stays where it was). */
+  deathBase: number | null
 }
+
+type ShotEvent = Extract<SimEvent, { type: 'shot' }>
+
+// Light-space axes of the moon's shadow camera, for snapping its frustum to whole texels.
+const MOON_OFFSET = new THREE.Vector3(-30, 50, -20)
+const MOON_Z = MOON_OFFSET.clone().normalize()
+const MOON_X = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), MOON_Z).normalize()
+const MOON_Y = new THREE.Vector3().crossVectors(MOON_Z, MOON_X)
+const SHADOW_EXTENT = 42
+const SHADOW_MAP = 2048
+const TEXEL = (SHADOW_EXTENT * 2) / SHADOW_MAP
 
 export interface ViewState {
   yaw: number
@@ -48,6 +62,14 @@ export class GameRenderer {
   readonly scene = new THREE.Scene()
   readonly camera = new THREE.PerspectiveCamera(FOV_HIP, 1, 0.05, 220)
   private mapView: MapView
+  private map: MapDef
+  private hemi: THREE.HemisphereLight
+  private sky: THREE.Mesh
+  private markers: { group: THREE.Group; station: Station; ring: THREE.Mesh; chevron: THREE.Mesh }[] = []
+  private markerMats: THREE.Material[] = []
+  private markerGeos: THREE.BufferGeometry[] = []
+  /** Station the local player can interact with right now (highlighted). */
+  activeStation: string | null = null
   private effects = new Effects()
   private players = new Map<string, PlayerView>()
   private zombies = new Map<number, ZombieView>()
@@ -56,11 +78,14 @@ export class GameRenderer {
   private shake = 0
   private time = 0
   private tmp = new THREE.Vector3()
+  private tmpV2 = new THREE.Vector2()
+  private pendingShots: ShotEvent[] = []
 
   constructor(
     private readonly canvas: HTMLCanvasElement,
-    private readonly map: MapDef,
+    map: MapDef,
   ) {
+    this.map = map
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' })
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5))
     this.renderer.outputColorSpace = THREE.SRGBColorSpace
@@ -72,16 +97,17 @@ export class GameRenderer {
     const t = map.theme
     this.scene.background = new THREE.Color(t.sky)
     this.scene.fog = new THREE.FogExp2(t.fog, t.fogDensity)
-    this.scene.add(new THREE.HemisphereLight(t.ambient, 0x0d0d0f, t.ambientIntensity))
+    this.hemi = new THREE.HemisphereLight(t.ambient, 0x0d0d0f, t.ambientIntensity)
+    this.scene.add(this.hemi)
     this.moon = new THREE.DirectionalLight(t.moon, t.moonIntensity)
-    this.moon.position.set(-30, 50, -20)
+    this.moon.position.copy(MOON_OFFSET)
     this.moon.castShadow = true
-    this.moon.shadow.mapSize.set(2048, 2048)
+    this.moon.shadow.mapSize.set(SHADOW_MAP, SHADOW_MAP)
     const sc = this.moon.shadow.camera
-    sc.left = -42
-    sc.right = 42
-    sc.top = 42
-    sc.bottom = -42
+    sc.left = -SHADOW_EXTENT
+    sc.right = SHADOW_EXTENT
+    sc.top = SHADOW_EXTENT
+    sc.bottom = -SHADOW_EXTENT
     sc.near = 1
     sc.far = 140
     this.moon.shadow.bias = -0.0006
@@ -93,12 +119,99 @@ export class GameRenderer {
     this.camera.add(this.fill)
     this.fill.position.set(0, 0.6, 0.4)
     this.scene.add(this.camera)
-    this.scene.add(buildSky(t.sky, t.fog))
+    this.sky = buildSky(t.sky, t.fog)
+    this.scene.add(this.sky)
 
     this.mapView = buildMap(map)
     this.scene.add(this.mapView.group)
+    this.buildMarkers()
     this.scene.add(this.effects.group)
     this.resize()
+    this.warmup()
+  }
+
+  /** Swap to another map (hub <-> mission): new geometry, lighting theme and station markers. */
+  setMap(map: MapDef) {
+    if (map === this.map) return
+    this.clearEntities()
+    this.scene.remove(this.mapView.group)
+    this.mapView.dispose()
+    this.map = map
+    const t = map.theme
+    ;(this.scene.background as THREE.Color).set(t.sky)
+    const fog = this.scene.fog as THREE.FogExp2
+    fog.color.set(t.fog)
+    fog.density = t.fogDensity
+    this.hemi.color.set(t.ambient)
+    this.hemi.intensity = t.ambientIntensity
+    this.moon.color.set(t.moon)
+    this.moon.intensity = t.moonIntensity
+    const skyU = (this.sky.material as THREE.ShaderMaterial).uniforms
+    skyU.top.value.set(t.sky)
+    skyU.horizon.value.set(t.fog)
+    this.mapView = buildMap(map)
+    this.scene.add(this.mapView.group)
+    this.buildMarkers()
+    this.warmup()
+  }
+
+  private buildMarkers() {
+    for (const m of this.markers) this.scene.remove(m.group)
+    for (const m of this.markerMats) m.dispose()
+    for (const g of this.markerGeos) g.dispose()
+    this.markers = []
+    this.markerMats = []
+    this.markerGeos = []
+    const stations = this.map.stations ?? []
+    if (!stations.length) return
+    const ringGeo = new THREE.RingGeometry(0.9, 1.05, 40)
+    const chevGeo = new THREE.OctahedronGeometry(0.16, 0)
+    this.markerGeos.push(ringGeo, chevGeo)
+    for (const st of stations) {
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xd9d4ca, transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending })
+      const chevMat = new THREE.MeshBasicMaterial({ color: 0xd9d4ca, transparent: true, opacity: 0.8 })
+      this.markerMats.push(ringMat, chevMat)
+      const group = new THREE.Group()
+      group.position.set(st.x, 0, st.z)
+      const ring = new THREE.Mesh(ringGeo, ringMat)
+      ring.rotation.x = -Math.PI / 2
+      ring.position.y = 0.03
+      const chevron = new THREE.Mesh(chevGeo, chevMat)
+      chevron.position.y = 2.3
+      group.add(ring, chevron)
+      this.scene.add(group)
+      this.markers.push({ group, station: st, ring, chevron })
+    }
+  }
+
+  private animateMarkers() {
+    for (const m of this.markers) {
+      const active = m.station.id === this.activeStation
+      m.chevron.position.y = 2.3 + Math.sin(this.time * 2.2 + m.station.x) * 0.12
+      m.chevron.rotation.y = this.time * 1.5
+      ;(m.ring.material as THREE.MeshBasicMaterial).opacity = active ? 0.75 : 0.28 + Math.sin(this.time * 2) * 0.06
+      m.ring.scale.setScalar(active ? 1.08 : 1)
+    }
+  }
+
+  /** Compile every shader the fight will need now, not on the first shot or the first zombie. */
+  private warmup() {
+    const rig = buildHumanoid({ outfit: infectedOutfit(1), eyeGlow: 0x8a1c12 })
+    buildPistol(rig.handR)
+    this.scene.add(rig.root)
+    const restore = this.effects.warmup()
+    try {
+      this.renderer.compile(this.scene, this.camera)
+    } finally {
+      restore()
+      this.scene.remove(rig.root)
+      rig.dispose()
+    }
+  }
+
+  /** Static map draw calls before/after baking. */
+  get mapDraws() {
+    return { before: this.mapView.drawsBefore, after: this.mapView.drawsAfter }
   }
 
   resize() {
@@ -107,8 +220,7 @@ export class GameRenderer {
     this.renderer.setSize(w, h, false)
     this.camera.aspect = w / Math.max(1, h)
     this.camera.updateProjectionMatrix()
-    const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2())
-    this.effects.setViewport(buf.y, this.camera.fov)
+    this.effects.setViewport(this.renderer.getDrawingBufferSize(this.tmpV2).y, this.camera.fov)
   }
 
   /** React to one-shot sim events with effects. */
@@ -116,12 +228,14 @@ export class GameRenderer {
     for (const e of events) {
       switch (e.type) {
         case 'shot': {
+          // Flash and tracer spawn in render(), once the shooter's arm is posed for this shot.
+          this.pendingShots.push(e)
           const pv = this.players.get(e.playerId)
-          const from = pv ? pv.muzzle.getWorldPosition(this.tmp).clone() : e.muzzle
-          this.effects.muzzleFlash(from)
-          this.effects.tracer(from, e.end)
+          if (pv) {
+            pv.recoil = 1
+            pv.fresh = true
+          }
           if (e.hit === 'world') this.effects.impactWorld(e.end, e.normal)
-          if (pv) pv.recoil = 1
           if (e.playerId === localId) this.shake = Math.max(this.shake, 0.05)
           break
         }
@@ -157,6 +271,7 @@ export class GameRenderer {
     for (const v of this.zombies.values()) this.disposeRig(v.rig)
     this.players.clear()
     this.zombies.clear()
+    this.pendingShots = []
     this.effects.clear()
   }
 
@@ -165,16 +280,17 @@ export class GameRenderer {
     this.time += dt
     this.syncPlayers(state, prev, alpha, view, dt)
     this.syncZombies(state, prev, alpha, dt)
-    this.effects.update(dt)
+    this.spawnShotEffects()
+    this.animateMarkers()
     if (cinematic) {
       this.camera.position.set(cinematic.pos.x, cinematic.pos.y, cinematic.pos.z)
       this.camera.lookAt(cinematic.target.x, cinematic.target.y, cinematic.target.z)
       if (Math.abs(this.camera.fov - FOV_HIP) > 0.01) {
         this.camera.fov = FOV_HIP
         this.camera.updateProjectionMatrix()
+        this.effects.setViewport(this.renderer.getDrawingBufferSize(this.tmpV2).y, FOV_HIP)
       }
-      this.moon.target.position.set(cinematic.target.x, 0, cinematic.target.z)
-      this.moon.position.set(cinematic.target.x - 30, 50, cinematic.target.z - 20)
+      this.followShadow(cinematic.target.x, cinematic.target.z)
     } else {
       this.updateCamera(state, prev, alpha, view, dt)
     }
@@ -183,6 +299,33 @@ export class GameRenderer {
       l.light.intensity = l.base * f
     }
     this.renderer.render(this.scene, this.camera)
+    // Age effects after drawing, so a flash or tracer always gets its first frame at full strength.
+    this.effects.update(dt)
+  }
+
+  private spawnShotEffects() {
+    for (const e of this.pendingShots) {
+      const pv = this.players.get(e.playerId)
+      let from = e.muzzle
+      if (pv) {
+        pv.rig.root.updateMatrixWorld(true)
+        from = pv.muzzle.getWorldPosition(this.tmp).clone()
+      }
+      this.effects.muzzleFlash(from)
+      this.effects.tracer(from, e.end)
+    }
+    this.pendingShots.length = 0
+  }
+
+  /** Centre the shadow frustum on (x, z), snapped to whole shadow texels so static shadows don't crawl. */
+  private followShadow(x: number, z: number) {
+    const p = this.tmp.set(x, 0, z)
+    const u = Math.round(p.dot(MOON_X) / TEXEL) * TEXEL
+    const v = Math.round(p.dot(MOON_Y) / TEXEL) * TEXEL
+    const w = p.dot(MOON_Z)
+    const target = this.moon.target.position
+    target.set(0, 0, 0).addScaledVector(MOON_X, u).addScaledVector(MOON_Y, v).addScaledVector(MOON_Z, w)
+    this.moon.position.copy(target).add(MOON_OFFSET)
   }
 
   private interp(prev: Snapshot | null, key: string, x: number, z: number, facing: number, alpha: number) {
@@ -209,11 +352,9 @@ export class GameRenderer {
     if (Math.abs(this.camera.fov - fov) > 0.01) {
       this.camera.fov = lerp(this.camera.fov, fov, Math.min(1, dt * 14))
       this.camera.updateProjectionMatrix()
-      this.effects.setViewport(this.renderer.getDrawingBufferSize(new THREE.Vector2()).y, this.camera.fov)
+      this.effects.setViewport(this.renderer.getDrawingBufferSize(this.tmpV2).y, this.camera.fov)
     }
-    // Keep the shadow frustum centred on the action.
-    this.moon.target.position.set(pos.x, 0, pos.z)
-    this.moon.position.set(pos.x - 30, 50, pos.z - 20)
+    this.followShadow(pos.x, pos.z)
   }
 
   private syncPlayers(state: WorldState, prev: Snapshot | null, alpha: number, view: ViewState, dt: number) {
@@ -225,13 +366,17 @@ export class GameRenderer {
         const rig = buildHumanoid({ outfit: getCharacter(p.characterId).outfit })
         const muzzle = buildPistol(rig.handR)
         this.scene.add(rig.root)
-        v = { rig, muzzle, gait: 0, recoil: 0, meleeT: 0, reloadT: 0 }
+        v = { rig, muzzle, gait: 0, recoil: 0, fresh: false, meleeT: 0, reloadT: 0 }
         this.players.set(p.id, v)
       }
       const ip = this.interp(prev, `p:${p.id}`, p.pos.x, p.pos.z, p.facing, alpha)
       v.rig.root.position.set(ip.x, 0, ip.z)
-      v.rig.root.rotation.y = ip.facing
-      animatePlayer(v, p, p.id === view.localId ? view.pitch : p.pitch, dt)
+      // A shot snaps the body to the aim; don't interpolate that turn or the flash leaves the gun.
+      v.rig.root.rotation.y = v.fresh ? p.facing : ip.facing
+      // Weapons stay holstered in a safe hub.
+      const holstered = !!this.map.safe
+      if (v.muzzle.parent) v.muzzle.parent.visible = !holstered
+      animatePlayer(v, p, p.id === view.localId ? view.pitch : p.pitch, dt, holstered)
     }
     for (const [id, v] of this.players) {
       if (!seen.has(id)) {
@@ -248,16 +393,15 @@ export class GameRenderer {
       let v = this.zombies.get(z.id)
       if (!v) {
         const s = z.seed
-        const scale = 0.94 + ((s % 1000) / 1000) * 0.12
-        const rig = buildHumanoid({ outfit: infectedOutfit(s), scale, eyeGlow: 0x8a1c12 })
+        const rig = buildHumanoid({ outfit: infectedOutfit(s), scale: z.scale, eyeGlow: 0x8a1c12 })
         this.scene.add(rig.root)
         v = {
           rig,
           gait: (s % 628) / 100,
           gaitRate: 0.9 + ((s >> 3) % 100) / 400,
           flash: 0,
-          lean: 0.15 + ((s >> 5) % 100) / 500,
           armSpread: ((s >> 7) % 100) / 100,
+          deathBase: null,
         }
         this.zombies.set(z.id, v)
       }
@@ -282,6 +426,10 @@ export class GameRenderer {
   dispose() {
     this.clearEntities()
     this.mapView.dispose()
+    for (const m of this.markerMats) m.dispose()
+    for (const g of this.markerGeos) g.dispose()
+    this.sky.geometry.dispose()
+    ;(this.sky.material as THREE.Material).dispose()
     this.effects.dispose()
     this.renderer.dispose()
   }
@@ -314,6 +462,8 @@ function buildSky(top: number, horizon: number): THREE.Mesh {
         vec3 c = mix(horizon, top, smoothstep(0.0, 0.45, h));
         c += glow * pow(1.0 - h, 6.0) * 0.9;
         gl_FragColor = vec4(c, 1.0);
+        #include <tonemapping_fragment>
+        #include <colorspace_fragment>
       }`,
   })
   const sky = new THREE.Mesh(new THREE.SphereGeometry(180, 24, 12), mat)
@@ -325,7 +475,7 @@ function buildSky(top: number, horizon: number): THREE.Mesh {
 // Procedural animation
 // ---------------------------------------------------------------------------
 
-function animatePlayer(v: PlayerView, p: PlayerState, pitch: number, dt: number) {
+function animatePlayer(v: PlayerView, p: PlayerState, pitch: number, dt: number, holstered = false) {
   const r = v.rig
   const speed = Math.hypot(p.vel.x, p.vel.z)
   if (!p.alive) {
@@ -351,14 +501,26 @@ function animatePlayer(v: PlayerView, p: PlayerState, pitch: number, dt: number)
   r.shinL.rotation.x = Math.max(0, -Math.sin(v.gait * 2 + 0.6)) * stride * 1.4
   r.shinR.rotation.x = Math.max(0, Math.sin(v.gait * 2 + 0.6)) * stride * 1.4
   r.hips.position.y = 0.94 + Math.abs(Math.cos(v.gait * 2)) * 0.035 * stride
-  r.torso.rotation.x = p.sprinting ? 0.22 : 0.04
+  // Negative rotation.x pitches the torso forward (the model faces -Z).
+  r.torso.rotation.x = p.sprinting ? -0.22 : -0.04
 
   v.recoil = Math.max(0, v.recoil - dt * 9)
   v.meleeT = Math.max(0, v.meleeT - dt * 3.2)
   v.reloadT = Math.max(0, v.reloadT - dt)
 
-  const combat = p.aimBlend > 0.05 || p.sinceShot < 0.7
-  const k = Math.min(1, dt * 16)
+  const combat = !holstered && (p.aimBlend > 0.05 || p.sinceShot < 0.7)
+  const k = v.fresh ? 1 : Math.min(1, dt * 16)
+  v.fresh = false
+  if (holstered) {
+    // Relaxed walk: both arms swing against the legs.
+    r.torso.rotation.y = lerp(r.torso.rotation.y, 0, k)
+    r.armR.rotation.set(lerp(r.armR.rotation.x, s * stride * 0.9, k), 0, lerp(r.armR.rotation.z, -0.06, k))
+    r.armL.rotation.set(lerp(r.armL.rotation.x, -s * stride * 0.9, k), 0, lerp(r.armL.rotation.z, 0.06, k))
+    r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.25 + stride * 0.4, k)
+    r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.25 + stride * 0.4, k)
+    r.head.rotation.x = lerp(r.head.rotation.x, 0, k)
+    return
+  }
   if (v.meleeT > 0) {
     // Shove: both arms punch forward.
     const t = Math.sin((1 - v.meleeT) * Math.PI)
@@ -385,7 +547,7 @@ function animatePlayer(v: PlayerView, p: PlayerState, pitch: number, dt: number)
     r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.02 + v.recoil * 0.12, k)
     r.armL.rotation.set(lerp(r.armL.rotation.x, up - 0.05, k), 0, lerp(r.armL.rotation.z, 0.5, k))
     r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.35, k)
-    r.head.rotation.x = -pitch * 0.5
+    r.head.rotation.x = pitch * 0.5 // look up/down with the aim (positive x tips the face up)
   } else {
     // Low ready, off hand swings with the stride.
     r.armR.rotation.set(lerp(r.armR.rotation.x, 0.35 + s * 0.08 * stride, k), 0, lerp(r.armR.rotation.z, -0.05, k))
@@ -402,11 +564,15 @@ function animateZombie(v: ZombieView, z: ZombieState, dt: number) {
   v.flash = Math.max(0, v.flash - dt * 7)
   for (const m of r.flashMats) m.emissive.setRGB(v.flash * 0.6, v.flash * 0.12, v.flash * 0.08)
 
+  // Torso lean and the climb out of the ground come from sim/pose.ts, the same functions the hit
+  // volumes use, so what you aim at is what gets hit. Negative rotation.x leans forward.
+  const leanK = Math.min(1, dt * (z.mode === 'attack' ? 22 : 12))
+  r.torso.rotation.x = lerp(r.torso.rotation.x, -torsoLean(z), leanK)
   if (z.mode === 'rising') {
-    const t = Math.min(1, z.modeTime / RISE_TIME)
-    const e = 1 - (1 - t) * (1 - t)
-    r.body.position.y = lerp(-1.5, 0, e)
-    r.body.rotation.x = lerp(0.5, v.lean * 0.6, e)
+    const sink = riseOffset(z)
+    const e = 1 + sink / 1.5
+    r.body.position.y = sink
+    r.body.rotation.x = 0
     r.armR.rotation.x = lerp(2.8, 1.3, e)
     r.armL.rotation.x = lerp(2.6, 1.1, e)
     return
@@ -423,13 +589,15 @@ function animateZombie(v: ZombieView, z: ZombieState, dt: number) {
     const lz = local.x * sn + local.z * c
     r.body.rotation.x = lz * fall * 1.45
     r.body.rotation.z = -lx * fall * 1.45
-    r.body.position.y = z.modeTime > 5 ? -(z.modeTime - 5) * 0.35 : 0
+    if (v.deathBase === null) v.deathBase = r.body.position.y
+    r.body.position.y = v.deathBase + (z.modeTime > 5 ? -(z.modeTime - 5) * 0.35 : 0)
     r.armL.rotation.x = lerp(r.armL.rotation.x, 2.2, Math.min(1, dt * 6))
     r.armR.rotation.x = lerp(r.armR.rotation.x, 2.0, Math.min(1, dt * 6))
     r.legL.rotation.x = lerp(r.legL.rotation.x, 0.3, Math.min(1, dt * 6))
     return
   }
   r.body.position.y = 0
+  r.body.rotation.x = 0
   r.body.rotation.z = 0
   const speed = Math.hypot(z.vel.x, z.vel.z)
   v.gait += dt * speed * 2.2 * v.gaitRate
@@ -451,25 +619,21 @@ function animateZombie(v: ZombieView, z: ZombieState, dt: number) {
       // Wind up: arms rise high and back.
       r.armR.rotation.x = lerp(r.armR.rotation.x, 2.7, k)
       r.armL.rotation.x = lerp(r.armL.rotation.x, 2.5, k)
-      r.body.rotation.x = lerp(r.body.rotation.x, -0.1, k)
     } else {
       // Swipe down and forward.
       r.armR.rotation.x = lerp(r.armR.rotation.x, 0.9, Math.min(1, dt * 22))
       r.armL.rotation.x = lerp(r.armL.rotation.x, 1.1, Math.min(1, dt * 22))
-      r.body.rotation.x = lerp(r.body.rotation.x, 0.45, Math.min(1, dt * 18))
     }
     return
   }
   if (z.mode === 'stagger') {
     const t = Math.sin(Math.min(1, z.modeTime / a.staggerTime) * Math.PI)
-    r.body.rotation.x = lerp(v.lean, -0.35, t)
-    r.head.rotation.x = -0.5 * t
+    r.head.rotation.x = 0.5 * t
     r.armR.rotation.x = lerp(r.armR.rotation.x, 0.4, k)
     r.armL.rotation.x = lerp(r.armL.rotation.x, 0.6, k)
     return
   }
-  // Chase: classic reaching arms, uneven.
-  r.body.rotation.x = lerp(r.body.rotation.x, v.lean, k)
+  // Chase: classic reaching arms, uneven, head hanging forward (negative x pitches it down).
   r.head.rotation.x = lerp(r.head.rotation.x, -0.2, k)
   r.armR.rotation.x = lerp(r.armR.rotation.x, 1.25 + s * 0.12 + v.armSpread * 0.3, k)
   r.armL.rotation.x = lerp(r.armL.rotation.x, 1.05 - s * 0.12, k)

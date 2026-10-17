@@ -23,7 +23,3 @@ export const ZOMBIES: Record<ZombieArchetypeId, ZombieArchetype> = {
     score: 100,
   },
 }
-
-/** Head hit sphere, measured down from the top of the capsule. */
-export const HEAD_DROP = 0.17
-export const HEAD_RADIUS = 0.16

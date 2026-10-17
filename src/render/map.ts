@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import type { MapDef, Obstacle } from '../sim/types'
+import { bakeStatic } from './bake'
 
 // Builds the visual side of a MapDef. Every texture is drawn on a canvas at load,
 // so a territory costs no downloads. Approved art can swap in per material later.
@@ -201,6 +202,9 @@ export interface MapView {
   group: THREE.Group
   /** Lamp heads (for a subtle flicker). */
   lamps: { light: THREE.PointLight; base: number; mat: THREE.MeshStandardMaterial; phase: number }[]
+  /** Static draw calls before/after baking (diagnostics). */
+  drawsBefore: number
+  drawsAfter: number
   dispose(): void
 }
 
@@ -224,19 +228,11 @@ export function buildMap(map: MapDef): MapView {
 
   // Faded parking bays and a lane line, flush with the ground.
   const paint = track(new THREE.MeshStandardMaterial({ color: 0x8d8a80, roughness: 0.9, transparent: true, opacity: 0.35 }))
-  const lineGeo = track(new THREE.PlaneGeometry(0.12, 4.6))
-  for (let i = 0; i < 9; i++) {
-    const l = new THREE.Mesh(lineGeo, paint)
+  for (const mk of map.markings ?? []) {
+    const l = new THREE.Mesh(track(new THREE.PlaneGeometry(mk.w, mk.d)), paint)
     l.rotation.x = -Math.PI / 2
-    l.position.set(-20 + i * 2.6, 0.012, -18)
+    l.position.set(mk.x, 0.012, mk.z)
     l.receiveShadow = true
-    root.add(l)
-  }
-  const laneGeo = track(new THREE.PlaneGeometry(0.15, 2.2))
-  for (let z = -24; z <= 24; z += 4.5) {
-    const l = new THREE.Mesh(laneGeo, paint)
-    l.rotation.x = -Math.PI / 2
-    l.position.set(-23, 0.012, z)
     root.add(l)
   }
 
@@ -247,7 +243,7 @@ export function buildMap(map: MapDef): MapView {
     const p = new THREE.Mesh(track(new THREE.CircleGeometry(0.8 + pr() * 1.4, 18)), puddleMat)
     p.rotation.x = -Math.PI / 2
     p.scale.set(1, 0.5 + pr() * 0.6, 1)
-    p.position.set((pr() - 0.5) * 50, 0.015, (pr() - 0.5) * 50)
+    p.position.set((pr() - 0.5) * map.halfX * 1.4, 0.015, (pr() - 0.5) * map.halfZ * 1.4)
     p.receiveShadow = true
     root.add(p)
   }
@@ -256,17 +252,18 @@ export function buildMap(map: MapDef): MapView {
   const curbTex = track(concreteTexture(3, '#4a4a4c'))
   curbTex.repeat.set(8, 1)
   const sidewalkMat = track(new THREE.MeshStandardMaterial({ map: curbTex, color: 0x9a9a9a, roughness: 0.95 }))
-  const strip = (x: number, z: number, w: number, d: number) => {
-    const s = new THREE.Mesh(track(new THREE.PlaneGeometry(w, d)), sidewalkMat)
+  // A sidewalk in front of every building face that looks onto the street.
+  let lift = 0
+  for (const o of map.obstacles) {
+    if (o.kind !== 'building' && o.kind !== 'shop' && o.kind !== 'garage') continue
+    const { group: f, width } = faceGroup(root, o)
+    const s = new THREE.Mesh(track(new THREE.PlaneGeometry(width, 2.6)), sidewalkMat)
     s.rotation.x = -Math.PI / 2
-    s.position.set(x, 0.008, z)
+    // Tiny height steps so overlapping corners never z-fight.
+    s.position.set(0, 0.006 + (lift++ % 4) * 0.0015, 1.3)
     s.receiveShadow = true
-    root.add(s)
+    f.add(s)
   }
-  strip(0, -26.6, 56, 2.8)
-  strip(0, 26.6, 56, 2.8)
-  strip(-26.6, 0, 2.8, 50.4)
-  strip(26.6, 0, 2.8, 50.4)
 
   // --- obstacles ------------------------------------------------------------
   const facades = new Map<number, THREE.Material[]>()
@@ -302,6 +299,10 @@ export function buildMap(map: MapDef): MapView {
   const tail = track(new THREE.MeshStandardMaterial({ color: 0x400808, emissive: 0x6a0a0a, emissiveIntensity: 0.6 }))
   const head = track(new THREE.MeshStandardMaterial({ color: 0x9a9a90, emissive: 0x222018, roughness: 0.3 }))
   const carColors = [0x2a2e33, 0x3b1d1d, 0x1d2630, 0x4a4842, 0x1b1b1c]
+  const doorMats: DoorMats = {
+    door: track(new THREE.MeshStandardMaterial({ color: 0x141517, roughness: 0.5, metalness: 0.4 })),
+    light: track(new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffc890, emissiveIntensity: 1.4 })),
+  }
   const wheelGeo = track(new THREE.CylinderGeometry(0.34, 0.34, 0.24, 14))
 
   const add = (m: THREE.Mesh, cast = true) => {
@@ -332,11 +333,20 @@ export function buildMap(map: MapDef): MapView {
           unit.position.set(cx + (rr() - 0.5) * (w - 3), o.height + 0.8, cz + (rr() - 0.5) * (d - 3))
         }
         // Ground-floor doors on the courtyard side.
-        addDoors(root, o, track, rr)
+        addDoors(root, o, track, rr, doorMats)
         break
       }
       case 'shop':
         buildShop(root, o, track, concreteMat)
+        break
+      case 'garage':
+        buildGarage(root, o, track, concreteMat)
+        break
+      case 'board':
+        buildBoard(root, o, track, darkMetal)
+        break
+      case 'bench':
+        buildBench(root, o, track, crateMat, darkMetal)
         break
       case 'car':
         buildCar(root, o, carColors[(o.variant ?? 0) % carColors.length], { glass, tire, tail, head, wheelGeo }, track)
@@ -382,23 +392,33 @@ export function buildMap(map: MapDef): MapView {
   const lamps: MapView['lamps'] = []
   const poleMat = track(new THREE.MeshStandardMaterial({ color: 0x1c1e20, roughness: 0.6, metalness: 0.6 }))
   const glowTex = track(radialTexture())
+  // One fixture/pool material per colour so the baked map stays a handful of draws.
+  const lampMats = new Map<number, THREE.MeshStandardMaterial>()
+  const poolMats = new Map<number, THREE.MeshBasicMaterial>()
   map.lights.forEach((l, i) => {
     const pole = add(new THREE.Mesh(track(new THREE.CylinderGeometry(0.07, 0.1, l.height, 8)), poleMat))
     pole.position.set(l.x, l.height / 2, l.z)
-    const lampMat = track(new THREE.MeshStandardMaterial({ color: 0x111111, emissive: l.color, emissiveIntensity: 2.2 }))
+    let lampMat = lampMats.get(l.color)
+    if (!lampMat) {
+      lampMat = track(new THREE.MeshStandardMaterial({ color: 0x111111, emissive: l.color, emissiveIntensity: 2.2 }))
+      lampMats.set(l.color, lampMat)
+    }
     const lamp = add(new THREE.Mesh(track(new THREE.BoxGeometry(0.5, 0.12, 0.28)), lampMat), false)
     lamp.position.set(l.x, l.height, l.z)
-    const light = new THREE.PointLight(l.color, l.intensity, 26, 1.35)
-    light.position.set(l.x, l.height - 0.3, l.z)
-    root.add(light)
+    let poolMat = poolMats.get(l.color)
+    if (!poolMat) {
+      poolMat = track(new THREE.MeshBasicMaterial({ map: glowTex, color: l.color, transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending }))
+      poolMats.set(l.color, poolMat)
+    }
     // Cheap fake light pool on the ground.
-    const pool = new THREE.Mesh(
-      track(new THREE.PlaneGeometry(9, 9)),
-      track(new THREE.MeshBasicMaterial({ map: glowTex, color: l.color, transparent: true, opacity: 0.16, depthWrite: false, blending: THREE.AdditiveBlending })),
-    )
+    const pool = new THREE.Mesh(track(new THREE.PlaneGeometry(9, 9)), poolMat)
     pool.rotation.x = -Math.PI / 2
     pool.position.set(l.x, 0.02, l.z)
     root.add(pool)
+    if (l.dynamic === false) return
+    const light = new THREE.PointLight(l.color, l.intensity, 26, 1.35)
+    light.position.set(l.x, l.height - 0.3, l.z)
+    root.add(light)
     lamps.push({ light, base: l.intensity, mat: lampMat, phase: i * 1.7 })
   })
 
@@ -425,19 +445,30 @@ export function buildMap(map: MapDef): MapView {
     root.add(m)
   }
 
+  // Collapse the hundreds of static parts into one mesh per material.
+  const baked = bakeStatic(root)
+  for (const g of baked.geometries) track(g)
+
   return {
     group: root,
     lamps,
+    drawsBefore: baked.drawsBefore,
+    drawsAfter: baked.drawsAfter,
     dispose() {
       for (const d of disposables) d.dispose()
     },
   }
 }
 
-function addDoors(root: THREE.Group, o: Obstacle, track: <T extends { dispose(): void }>(x: T) => T, r: () => number) {
+interface DoorMats {
+  door: THREE.Material
+  light: THREE.Material
+}
+
+function addDoors(root: THREE.Group, o: Obstacle, track: <T extends { dispose(): void }>(x: T) => T, r: () => number, mats: DoorMats) {
   // Doors on whichever faces look into the courtyard (toward the map centre).
-  const doorMat = track(new THREE.MeshStandardMaterial({ color: 0x141517, roughness: 0.5, metalness: 0.4 }))
-  const lightMat = track(new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xffc890, emissiveIntensity: 1.4 }))
+  const doorMat = mats.door
+  const lightMat = mats.light
   const cx = (o.minX + o.maxX) / 2
   const cz = (o.minZ + o.maxZ) / 2
   const faces: { x: number; z: number; ry: number; span: number; along: 'x' | 'z' }[] = []
@@ -463,21 +494,53 @@ function addDoors(root: THREE.Group, o: Obstacle, track: <T extends { dispose():
   }
 }
 
-function buildShop(root: THREE.Group, o: Obstacle, track: <T extends { dispose(): void }>(x: T) => T, concrete: THREE.Material) {
-  const w = o.maxX - o.minX
-  const d = o.maxZ - o.minZ
+type Track = <T extends { dispose(): void }>(x: T) => T
+
+/**
+ * A group sitting on the box face that looks toward the map centre, with local +Z as the
+ * face normal and local X along the face. Storefronts, garage doors and boards hang off it.
+ */
+function faceGroup(root: THREE.Group, o: Obstacle): { group: THREE.Group; width: number } {
   const cx = (o.minX + o.maxX) / 2
   const cz = (o.minZ + o.maxZ) / 2
-  const body = new THREE.Mesh(track(worldUVBox(w, o.height, d, 4, 3)), concrete)
-  body.position.set(cx, o.height / 2, cz)
-  body.castShadow = body.receiveShadow = true
-  root.add(body)
-  // Lit storefront window band facing south (+Z), shutter half down.
-  const glow = track(new THREE.MeshStandardMaterial({ color: 0x0b1014, emissive: 0x9fc6ff, emissiveIntensity: 0.55, roughness: 0.2 }))
-  const win = new THREE.Mesh(track(new THREE.PlaneGeometry(w - 2.4, 1.6)), glow)
-  win.position.set(cx - 0.6, 1.6, o.maxZ + 0.02)
-  root.add(win)
-  const shutterTex = track(
+  const g = new THREE.Group()
+  let width: number
+  if (Math.abs(cz) >= Math.abs(cx)) {
+    const towardPlusZ = cz <= 0
+    g.position.set(cx, 0, towardPlusZ ? o.maxZ : o.minZ)
+    g.rotation.y = towardPlusZ ? 0 : Math.PI
+    width = o.maxX - o.minX
+  } else {
+    const towardPlusX = cx <= 0
+    g.position.set(towardPlusX ? o.maxX : o.minX, 0, cz)
+    g.rotation.y = towardPlusX ? Math.PI / 2 : -Math.PI / 2
+    width = o.maxZ - o.minZ
+  }
+  root.add(g)
+  return { group: g, width }
+}
+
+function signTexture(label: string, track: Track): THREE.CanvasTexture {
+  return track(
+    canvasTexture(512, 96, (g) => {
+      g.fillStyle = '#101214'
+      g.fillRect(0, 0, 512, 96)
+      g.fillStyle = '#d9d4ca'
+      let size = 54
+      g.font = `bold ${size}px sans-serif`
+      while (g.measureText(label).width > 470 && size > 20) {
+        size -= 2
+        g.font = `bold ${size}px sans-serif`
+      }
+      g.textAlign = 'center'
+      g.textBaseline = 'middle'
+      g.fillText(label, 256, 52)
+    }),
+  )
+}
+
+function shutterTexture(track: Track, repeatX: number, repeatY: number): THREE.CanvasTexture {
+  const t = track(
     canvasTexture(64, 64, (g) => {
       g.fillStyle = '#3a3c3f'
       g.fillRect(0, 0, 64, 64)
@@ -485,39 +548,153 @@ function buildShop(root: THREE.Group, o: Obstacle, track: <T extends { dispose()
       for (let y = 0; y < 64; y += 4) g.fillRect(0, y, 64, 1)
     }),
   )
-  shutterTex.repeat.set(3, 3)
+  t.repeat.set(repeatX, repeatY)
+  return t
+}
+
+function addBody(root: THREE.Group, o: Obstacle, mat: THREE.Material, track: Track) {
+  const w = o.maxX - o.minX
+  const d = o.maxZ - o.minZ
+  const body = new THREE.Mesh(track(worldUVBox(w, o.height, d, 4, 3)), mat)
+  body.position.set((o.minX + o.maxX) / 2, o.height / 2, (o.minZ + o.maxZ) / 2)
+  body.castShadow = body.receiveShadow = true
+  root.add(body)
+}
+
+function buildShop(root: THREE.Group, o: Obstacle, track: Track, concrete: THREE.Material) {
+  addBody(root, o, concrete, track)
+  const { group: f, width } = faceGroup(root, o)
+  // Lit storefront window band, shutter half down.
+  const glow = track(new THREE.MeshStandardMaterial({ color: 0x0b1014, emissive: 0x9fc6ff, emissiveIntensity: 0.55, roughness: 0.2 }))
+  const win = new THREE.Mesh(track(new THREE.PlaneGeometry(width - 2.4, 1.6)), glow)
+  win.position.set(-0.6, 1.6, 0.02)
+  f.add(win)
   const shutter = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(w - 2.4, 0.9)),
-    track(new THREE.MeshStandardMaterial({ map: shutterTex, roughness: 0.6, metalness: 0.5 })),
+    track(new THREE.PlaneGeometry(width - 2.4, 0.9)),
+    track(new THREE.MeshStandardMaterial({ map: shutterTexture(track, 3, 3), roughness: 0.6, metalness: 0.5 })),
   )
-  shutter.position.set(cx - 0.6, 2.05, o.maxZ + 0.03)
-  root.add(shutter)
-  const awning = new THREE.Mesh(track(new THREE.BoxGeometry(w + 0.4, 0.12, 1.2)), track(new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.8 })))
-  awning.position.set(cx, o.height - 0.6, o.maxZ + 0.55)
+  shutter.position.set(-0.6, 2.05, 0.03)
+  f.add(shutter)
+  const awning = new THREE.Mesh(track(new THREE.BoxGeometry(width + 0.4, 0.12, 1.2)), track(new THREE.MeshStandardMaterial({ color: 0x1b1d1f, roughness: 0.8 })))
+  awning.position.set(0, o.height - 0.6, 0.55)
   awning.castShadow = true
-  root.add(awning)
+  f.add(awning)
   // Generic sign panel (no real brand).
-  const sign = track(
-    canvasTexture(256, 64, (g) => {
-      g.fillStyle = '#101214'
-      g.fillRect(0, 0, 256, 64)
-      g.fillStyle = '#d9d4ca'
-      g.font = 'bold 30px sans-serif'
-      g.textAlign = 'center'
-      g.textBaseline = 'middle'
-      g.fillText('CORNER  STORE', 128, 34)
-    }),
-  )
+  const sign = signTexture(o.label ?? 'CORNER  STORE', track)
   const signMesh = new THREE.Mesh(
-    track(new THREE.PlaneGeometry(4.4, 1.0)),
+    track(new THREE.PlaneGeometry(Math.min(width * 0.62, 6.5), Math.min(width * 0.62, 6.5) * (96 / 512) * 1.15)),
     track(new THREE.MeshStandardMaterial({ map: sign, emissiveMap: sign, emissive: 0xffffff, emissiveIntensity: 0.4 })),
   )
-  signMesh.position.set(cx, o.height - 0.05, o.maxZ + 1.16)
-  root.add(signMesh)
-  // Door on the east side.
+  signMesh.position.set(0, o.height - 0.05, 1.16)
+  f.add(signMesh)
   const door = new THREE.Mesh(track(new THREE.PlaneGeometry(1.1, 2.2)), track(new THREE.MeshStandardMaterial({ color: 0x15171a, metalness: 0.5, roughness: 0.4 })))
-  door.position.set(o.maxX - 0.9, 1.1, o.maxZ + 0.02)
-  root.add(door)
+  door.position.set(width / 2 - 0.9, 1.1, 0.02)
+  f.add(door)
+}
+
+function buildGarage(root: THREE.Group, o: Obstacle, track: Track, concrete: THREE.Material) {
+  addBody(root, o, concrete, track)
+  const { group: f, width } = faceGroup(root, o)
+  const doorW = Math.min(width - 2, 6.5)
+  const door = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(doorW, 3.6)),
+    track(new THREE.MeshStandardMaterial({ map: shutterTexture(track, 4, 14), roughness: 0.55, metalness: 0.6, color: 0x9a9da2 })),
+  )
+  door.position.set(0, 1.8, 0.03)
+  f.add(door)
+  const frameMat = track(new THREE.MeshStandardMaterial({ color: 0x141517, roughness: 0.6, metalness: 0.4 }))
+  for (const sx of [-1, 1]) {
+    const post = new THREE.Mesh(track(new THREE.BoxGeometry(0.25, 3.8, 0.2)), frameMat)
+    post.position.set(sx * (doorW / 2 + 0.12), 1.9, 0.1)
+    post.castShadow = true
+    f.add(post)
+  }
+  const lintel = new THREE.Mesh(track(new THREE.BoxGeometry(doorW + 0.5, 0.3, 0.25)), frameMat)
+  lintel.position.set(0, 3.75, 0.1)
+  f.add(lintel)
+  const sign = signTexture(o.label ?? 'GARAGE', track)
+  const signMesh = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(3.4, 0.7)),
+    track(new THREE.MeshStandardMaterial({ map: sign, emissiveMap: sign, emissive: 0xffffff, emissiveIntensity: 0.35 })),
+  )
+  signMesh.position.set(0, 4.4, 0.05)
+  f.add(signMesh)
+  const flood = new THREE.Mesh(track(new THREE.BoxGeometry(0.4, 0.15, 0.3)), track(new THREE.MeshStandardMaterial({ color: 0x222222, emissive: 0xfff1d6, emissiveIntensity: 1.6 })))
+  flood.position.set(0, 5, 0.25)
+  f.add(flood)
+}
+
+function boardTexture(label: string, track: Track): THREE.CanvasTexture {
+  const r = rand(808)
+  return track(
+    canvasTexture(512, 288, (g) => {
+      g.fillStyle = '#1b1a18'
+      g.fillRect(0, 0, 512, 288)
+      g.fillStyle = 'rgba(255,255,255,0.03)'
+      for (let i = 0; i < 400; i++) g.fillRect(r() * 512, r() * 288, 2, 2)
+      g.fillStyle = '#d9d4ca'
+      g.font = 'bold 40px sans-serif'
+      g.textAlign = 'left'
+      g.fillText(label, 24, 52)
+      g.fillRect(24, 64, 160, 3)
+      // Pinned briefs with red string between them.
+      const cards: [number, number][] = []
+      for (let i = 0; i < 6; i++) {
+        const x = 30 + (i % 3) * 160 + r() * 20
+        const y = 92 + Math.floor(i / 3) * 96 + r() * 12
+        cards.push([x + 55, y + 35])
+        g.save()
+        g.translate(x + 55, y + 35)
+        g.rotate((r() - 0.5) * 0.12)
+        g.fillStyle = i === 0 ? '#e9e2d3' : '#a8a296'
+        g.fillRect(-55, -35, 110, 70)
+        g.fillStyle = 'rgba(20,20,20,0.55)'
+        for (let l = 0; l < 4; l++) g.fillRect(-45, -22 + l * 13, 60 + r() * 30, 3)
+        g.fillStyle = '#9b2a20'
+        g.beginPath()
+        g.arc(0, -30, 4, 0, Math.PI * 2)
+        g.fill()
+        g.restore()
+      }
+      g.strokeStyle = 'rgba(155,42,32,0.8)'
+      g.lineWidth = 2
+      g.beginPath()
+      g.moveTo(cards[0][0], cards[0][1] - 30)
+      for (const [x, y] of cards.slice(1)) g.lineTo(x, y - 30)
+      g.stroke()
+    }),
+  )
+}
+
+function buildBoard(root: THREE.Group, o: Obstacle, track: Track, darkMetal: THREE.Material) {
+  addBody(root, o, darkMetal, track)
+  const { group: f, width } = faceGroup(root, o)
+  const tex = boardTexture(o.label ?? 'MISSIONS', track)
+  const h = Math.min(o.height - 0.6, width * (288 / 512))
+  const panel = new THREE.Mesh(
+    track(new THREE.PlaneGeometry(width - 0.3, h)),
+    track(new THREE.MeshStandardMaterial({ map: tex, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.18, roughness: 0.9 })),
+  )
+  panel.position.set(0, o.height - 0.25 - h / 2, 0.02)
+  f.add(panel)
+}
+
+function buildBench(root: THREE.Group, o: Obstacle, track: Track, wood: THREE.Material, metal: THREE.Material) {
+  const w = o.maxX - o.minX
+  const d = o.maxZ - o.minZ
+  const cx = (o.minX + o.maxX) / 2
+  const cz = (o.minZ + o.maxZ) / 2
+  const seat = new THREE.Mesh(track(new THREE.BoxGeometry(w, 0.08, d)), wood)
+  seat.position.set(cx, o.height, cz)
+  seat.castShadow = seat.receiveShadow = true
+  root.add(seat)
+  const alongX = w >= d
+  for (const s of [-1, 1]) {
+    const leg = new THREE.Mesh(track(new THREE.BoxGeometry(alongX ? 0.08 : d, o.height, alongX ? d : 0.08)), metal)
+    leg.position.set(cx + (alongX ? s * (w / 2 - 0.2) : 0), o.height / 2, cz + (alongX ? 0 : s * (d / 2 - 0.2)))
+    leg.castShadow = true
+    root.add(leg)
+  }
 }
 
 interface CarMats {

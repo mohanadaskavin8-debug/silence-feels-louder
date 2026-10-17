@@ -1,9 +1,35 @@
+import type { StationKind } from '../sim/types'
+import type { Profile } from './profile'
+
 // A tiny external store so React re-renders the HUD at ~15 Hz instead of every frame.
 
-export type GameStatus = 'title' | 'loading' | 'playing' | 'paused' | 'dead' | 'cleared' | 'error'
+/** title → hub ⇄ panel → playing → dead | cleared → hub. `paused` works in the hub and in missions. */
+export type GameStatus = 'title' | 'hub' | 'panel' | 'playing' | 'paused' | 'dead' | 'cleared' | 'error'
+export type Scene = 'hub' | 'mission'
+
+export interface MissionSummary {
+  missionId: string
+  missionName: string
+  success: boolean
+  kills: number
+  time: number
+  accuracy: number
+  wave: number
+  waveTotal: number
+  firstClear: boolean
+  clears: number
+}
 
 export interface HudSnapshot {
   status: GameStatus
+  scene: Scene
+  /** Station in reach (hub only): press E. */
+  station: { id: string; kind: StationKind; label: string } | null
+  panel: StationKind | null
+  profile: Profile | null
+  missionId: string | null
+  missionName: string
+  result: MissionSummary | null
   error: string | null
   characterName: string
   modelPlaceholder: boolean
@@ -44,6 +70,13 @@ export interface HudSnapshot {
 
 export const initialHud = (): HudSnapshot => ({
   status: 'title',
+  scene: 'hub',
+  station: null,
+  panel: null,
+  profile: null,
+  missionId: null,
+  missionName: '',
+  result: null,
   error: null,
   characterName: '',
   modelPlaceholder: true,

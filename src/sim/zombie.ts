@@ -1,12 +1,13 @@
 import { ZOMBIES } from '../data/enemies'
 import { resolveCircle, walkableLine } from './collision'
+import { RISE_TIME } from './pose'
 import { PLAYER_RADIUS, type SimCtx } from './context'
 import { damagePlayer } from './damage'
 import { approach, approachAngle, rngNext, rngRange, wrapAngle, yawFromDir } from './math'
 import type { PlayerState, ZombieArchetypeId, ZombieState } from './types'
 
-export const RISE_TIME = 1.1
 export const CORPSE_TIME = 7
+
 const ACCEL = 10
 const ATTACK_ARC = 1.25 // radians either side of facing
 
@@ -35,6 +36,8 @@ export function newZombie(
     attackResolved: false,
     targetId: null,
     seed: Math.floor(rngNext(rng) * 1e9),
+    scale: 0.94 + rngNext(rng) * 0.12,
+    staggerImmune: 0,
     deathDir: { x: 0, y: 0, z: 1 },
   }
 }
@@ -57,6 +60,7 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
   const a = ZOMBIES[z.archetype]
   z.modeTime += dt
   z.attackCooldown = Math.max(0, z.attackCooldown - dt)
+  z.staggerImmune = Math.max(0, z.staggerImmune - dt)
   let desiredX = 0
   let desiredZ = 0
   let accel = ACCEL
@@ -73,7 +77,9 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
       const dx = target.pos.x - z.pos.x
       const dz = target.pos.z - z.pos.z
       const dist = Math.hypot(dx, dz)
-      if (dist <= a.attackRange + PLAYER_RADIUS && z.attackCooldown <= 0) {
+      // Only swing with nothing solid in between (fences, walls): otherwise walk round.
+      const reachable = dist <= a.attackRange + PLAYER_RADIUS && walkableLine(ctx.map, z.pos.x, z.pos.z, target.pos.x, target.pos.z, 0.05)
+      if (reachable && z.attackCooldown <= 0) {
         setMode(z, 'attack')
         z.attackResolved = false
         ctx.events.push({ type: 'zombieAttack', zombieId: z.id, pos: { ...z.pos } })
@@ -81,7 +87,7 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
       }
       let hx = dx
       let hz = dz
-      if (!walkableLine(ctx.map, z.pos.x, z.pos.z, target.pos.x, target.pos.z, a.radius * 0.9)) {
+      if (!reachable && !walkableLine(ctx.map, z.pos.x, z.pos.z, target.pos.x, target.pos.z, a.radius * 0.9)) {
         const field = ctx.fieldFor(target.id)
         const wp = field ? ctx.nav.nextWaypoint(field, z.pos.x, z.pos.z) : null
         if (wp) {
@@ -92,7 +98,7 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
       const hl = Math.hypot(hx, hz)
       if (hl > 1e-4) {
         // Ease off just before contact so they crowd rather than overlap.
-        const slow = dist < a.attackRange + PLAYER_RADIUS + 0.4 ? 0.35 : 1
+        const slow = dist < a.attackRange + PLAYER_RADIUS + 0.4 ? 0.6 : 1
         desiredX = (hx / hl) * z.speed * slow
         desiredZ = (hz / hl) * z.speed * slow
         z.facing = approachAngle(z.facing, yawFromDir(hx, hz), a.turnRate * dt)
@@ -113,7 +119,8 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
           const dz = target.pos.z - z.pos.z
           const dist = Math.hypot(dx, dz)
           const off = Math.abs(wrapAngle(yawFromDir(dx, dz) - z.facing))
-          if (dist <= a.attackRange + PLAYER_RADIUS + 0.35 && off <= ATTACK_ARC) {
+          const clear = walkableLine(ctx.map, z.pos.x, z.pos.z, target.pos.x, target.pos.z, 0.05)
+          if (dist <= a.attackRange + PLAYER_RADIUS + 0.35 && off <= ATTACK_ARC && clear) {
             damagePlayer(ctx, target, a.attackDamage, { ...z.pos })
           }
         }
@@ -131,7 +138,7 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
       break
 
     case 'dead':
-      accel = 6
+      accel = 9
       break
   }
 
@@ -140,7 +147,8 @@ export function updateZombie(ctx: SimCtx, z: ZombieState, dt: number) {
   if (z.mode !== 'rising') {
     z.pos.x += z.vel.x * dt
     z.pos.z += z.vel.z * dt
-    if (z.mode !== 'dead') resolveCircle(ctx.map, z.pos, a.radius)
+    // Corpses keep colliding too, so a knocked-back body never ends up inside a car or wall.
+    resolveCircle(ctx.map, z.pos, a.radius)
   }
 }
 
@@ -185,11 +193,17 @@ export function separate(ctx: SimCtx) {
       const nx = d2 > 1e-8 ? dx / d : 1
       const nz = d2 > 1e-8 ? dz / d : 0
       const over = min - d
-      // Zombies give way; the player is nudged a little so a crowd feels heavy.
-      a.pos.x += nx * over * 0.8
-      a.pos.z += nz * over * 0.8
-      p.pos.x -= nx * over * 0.2
-      p.pos.z -= nz * over * 0.2
+      // Bodies are solid: the player can't plough through a crowd, and a surround really traps.
+      a.pos.x += nx * over * 0.35
+      a.pos.z += nz * over * 0.35
+      p.pos.x -= nx * over * 0.65
+      p.pos.z -= nz * over * 0.65
+      // Cancel the player's velocity into the zombie (n points from player to zombie).
+      const vn = p.vel.x * nx + p.vel.z * nz
+      if (vn > 0) {
+        p.vel.x -= nx * vn
+        p.vel.z -= nz * vn
+      }
     }
   }
   for (const z of zs) if (z.mode !== 'dead') resolveCircle(ctx.map, z.pos, ZOMBIES[z.archetype].radius)

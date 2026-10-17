@@ -4,7 +4,18 @@ import type { Rng, Vec3 } from './math'
 // Static data shapes (authored in src/data, read by sim + renderer)
 // ---------------------------------------------------------------------------
 
-export type ObstacleKind = 'building' | 'shop' | 'wall' | 'car' | 'dumpster' | 'crate' | 'barrier' | 'fence'
+export type ObstacleKind =
+  | 'building'
+  | 'shop'
+  | 'wall'
+  | 'car'
+  | 'dumpster'
+  | 'crate'
+  | 'barrier'
+  | 'fence'
+  | 'garage'
+  | 'board'
+  | 'bench'
 
 /** Axis-aligned box on the ground. Everything solid in a map is one of these. */
 export interface Obstacle {
@@ -18,6 +29,20 @@ export interface Obstacle {
   blocksShots?: boolean
   /** Visual variation index; ignored by the simulation. */
   variant?: number
+  /** Signage text (shops, boards); ignored by the simulation. */
+  label?: string
+}
+
+export type StationKind = 'mission-board' | 'armory' | 'squad'
+
+/** An interaction point in a safe hub: walk up to it and press E. */
+export interface Station {
+  id: string
+  kind: StationKind
+  label: string
+  x: number
+  z: number
+  radius: number
 }
 
 export interface MapLight {
@@ -26,6 +51,8 @@ export interface MapLight {
   height: number
   color: number
   intensity: number
+  /** false = glowing fixture and light pool only, no real light (cheaper). Defaults to true. */
+  dynamic?: boolean
 }
 
 export interface MapTheme {
@@ -50,6 +77,11 @@ export interface MapDef {
   obstacles: Obstacle[]
   lights: MapLight[]
   theme: MapTheme
+  /** Safe hubs have no combat: weapons stay holstered. */
+  safe?: boolean
+  /** Painted ground markings (parking bays, lane dashes): centre x/z, size w/d. Visual only. */
+  markings?: { x: number; z: number; w: number; d: number }[]
+  stations?: Station[]
 }
 
 export interface WeaponDef {
@@ -186,8 +218,10 @@ export interface WeaponState {
   reloadLeft: number
   /** Current bloom (radians), decays toward the base spread. */
   bloom: number
-  /** Semi-auto weapons need the trigger released between shots. */
+  /** Fire input on the previous tick (edge detection for semi-auto). */
   triggerHeld: boolean
+  /** Seconds a semi-auto trigger press stays queued while the gun is cycling or finishing a reload. */
+  buffer: number
 }
 
 export interface PlayerState {
@@ -235,8 +269,12 @@ export interface ZombieState {
   /** Whether the current attack swing already resolved its hit. */
   attackResolved: boolean
   targetId: string | null
-  /** Visual-only seed: outfit wear, gait offset. */
+  /** Seed for outfit wear, gait and resting lean (shared by sim pose and renderer). */
   seed: number
+  /** Body scale; hit volumes and the model both use it. */
+  scale: number
+  /** Seconds before this zombie can be staggered again (prevents stunlock). */
+  staggerImmune: number
   /** World-space direction of the killing blow, for the death fall. */
   deathDir: Vec3
 }

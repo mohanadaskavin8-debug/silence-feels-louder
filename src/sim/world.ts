@@ -10,7 +10,6 @@ import { CORPSE_TIME, separate, updateZombie } from './zombie'
 
 export const SIM_HZ = 60
 export const SIM_DT = 1 / SIM_HZ
-const FIELD_REFRESH = 0.15
 
 export interface SimPlayerConfig {
   id: string
@@ -34,7 +33,9 @@ export class Simulation {
   readonly map: MapDef
   readonly nav: NavGrid
   readonly encounter: EncounterDef
-  private fields = new Map<string, { goal: number; field: Int32Array; builtAt: number }>()
+  // Derived data only: each field is a pure function of its goal cell, so a sim restored
+  // from a WorldState snapshot rebuilds exactly the same paths.
+  private fields = new Map<string, { goal: number; field: Int32Array }>()
 
   constructor(readonly config: SimConfig) {
     this.map = getMap(config.mapId)
@@ -101,10 +102,9 @@ export class Simulation {
     const goal = this.nav.nearestFree(p.pos.x, p.pos.z)
     if (goal < 0) return null
     const cached = this.fields.get(playerId)
-    const now = this.state.time
-    if (cached && (cached.goal === goal || now - cached.builtAt < FIELD_REFRESH)) return cached.field
+    if (cached && cached.goal === goal) return cached.field
     const field = this.nav.buildField(goal)
-    this.fields.set(playerId, { goal, field, builtAt: now })
+    this.fields.set(playerId, { goal, field })
     return field
   }
 }

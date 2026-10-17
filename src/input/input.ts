@@ -22,6 +22,7 @@ export class InputController {
   onLockChange: (locked: boolean, reason: 'change' | 'error') => void = () => {}
   onToggleMute: () => void = () => {}
   onPause: () => void = () => {}
+  onInteract: () => void = () => {}
 
   private keys = new Set<string>()
   private fire = false
@@ -150,6 +151,7 @@ export class InputController {
     if (e.code === 'KeyR') this.reloadLatch = true
     if (e.code === 'KeyV' || e.code === 'KeyQ') this.meleeLatch = true
     if (e.code === 'KeyM') this.onToggleMute()
+    if (e.code === 'KeyE' || e.code === 'KeyF') this.onInteract()
     if (e.code === 'Escape' || e.code === 'KeyP') {
       // With pointer lock, Esc is eaten by the browser and arrives as a lock change instead.
       if (!this.locked) this.onPause()
