@@ -42,6 +42,8 @@ export interface HudSnapshot {
   magSize: number
   reserve: number
   weaponName: string
+  weaponSlots: { name: string; active: boolean }[]
+  switching: boolean
   reloadProgress: number | null
   /** Cone half-angle (radians) and current FOV (degrees) for the dynamic crosshair. */
   spread: number
@@ -90,6 +92,8 @@ export const initialHud = (): HudSnapshot => ({
   magSize: 0,
   reserve: 0,
   weaponName: '',
+  weaponSlots: [],
+  switching: false,
   reloadProgress: null,
   spread: 0,
   fov: 68,

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { CHARACTERS } from '../data/characters'
 import { MISSIONS, MISSION_TYPE_LABEL, TERRITORIES, isUnlocked, type MissionDef } from '../data/missions'
-import { WEAPONS } from '../data/weapons'
-import { isCleared, partyRoster, type FourthMember, type PartyMode, type Profile } from '../game/profile'
+import { WEAPONS, isSidearm } from '../data/weapons'
+import { ATTACHMENTS, SLOTS, fitsWeapon, resolveWeapon, type AttachmentChoice, type AttachmentSlot } from '../data/attachments'
+import { WEAPON_LEVELS, attachmentUnlocked, isCleared, partyRoster, weaponLevel, type FourthMember, type PartyMode, type Profile } from '../game/profile'
+import { WeaponPreview } from './WeaponPreview'
 import { ONLINE_MULTIPLAYER_AVAILABLE } from '../net/session'
-import type { CharacterDef, StationKind } from '../sim/types'
+import type { CharacterDef, StationKind, WeaponDef } from '../sim/types'
 
 const fmtTime = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
 
@@ -13,6 +15,9 @@ function useEscape(onClose: () => void) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat) return
+      // Typing in a field (loadout name) must not close the panel.
+      const t = e.target as Element | null
+      if (e.code === 'KeyE' && t?.closest('input, textarea, select')) return
       if (e.code === 'Escape' || e.code === 'KeyE') {
         e.preventDefault()
         onClose()
@@ -131,19 +136,19 @@ export function MissionBoard({ profile, onDeploy, onClose }: { profile: Profile;
   )
 }
 
-// --------------------------------------------------------------------------- armory
+// --------------------------------------------------------------------------- armory / gunsmith
 
-type StatKey = 'damage' | 'fireRate' | 'accuracy' | 'magSize' | 'handling'
+type StatKey = 'damage' | 'fireRate' | 'accuracy' | 'control' | 'magSize' | 'handling'
 
-function weaponStats(id: string): Record<StatKey, number> {
-  const w = WEAPONS[id]
+function weaponStats(w: WeaponDef): Record<StatKey, number> {
   // Normalised 0..1 for bars. Fictional game stats only.
   return {
     damage: Math.min(1, (w.damage * w.pellets) / 120),
     fireRate: Math.min(1, w.fireRate / 14),
-    accuracy: Math.max(0, 1 - w.spreadHip / 0.08),
-    magSize: Math.min(1, w.magSize / 45),
-    handling: Math.max(0, 1 - w.reloadTime / 3.5),
+    accuracy: Math.max(0, 1 - w.spreadAim / 0.06),
+    control: Math.max(0, 1 - w.recoilPitch / 0.07),
+    magSize: Math.min(1, w.magSize / 60),
+    handling: Math.max(0, 1 - w.reloadTime / 3.6),
   }
 }
 
@@ -151,58 +156,178 @@ const STAT_LABEL: Record<StatKey, string> = {
   damage: 'Damage',
   fireRate: 'Fire rate',
   accuracy: 'Accuracy',
+  control: 'Recoil control',
   magSize: 'Magazine',
   handling: 'Reload speed',
 }
 
-export function Armory({ profile, onEquip, onClose }: { profile: Profile; onEquip: (weaponId: string) => void; onClose: () => void }) {
+export interface ArmoryActions {
+  selectLoadout: (i: number) => void
+  renameLoadout: (i: number, name: string) => void
+  equip: (weaponId: string) => void
+  clearPrimary: () => void
+  setAttachment: (weaponId: string, slot: AttachmentSlot, id: string | null) => void
+  buyWeapon: (weaponId: string) => boolean
+}
+
+export function Armory({ profile, actions, onClose }: { profile: Profile; actions: ArmoryActions; onClose: () => void }) {
+  const loadout = profile.loadouts[profile.activeLoadout]
   const ids = Object.keys(WEAPONS)
-  const [selected, setSelected] = useState(profile.loadout.weaponId)
-  const w = WEAPONS[selected] ?? WEAPONS[ids[0]]
-  const stats = useMemo(() => weaponStats(w.id), [w.id])
-  const equipped = profile.loadout.weaponId === w.id
+  const sidearms = ids.filter((id) => isSidearm(WEAPONS[id]))
+  const primaries = ids.filter((id) => !isSidearm(WEAPONS[id]))
+  const [selected, setSelected] = useState(loadout.primary?.id ?? loadout.sidearm.id)
+  const base = WEAPONS[selected] ?? WEAPONS[ids[0]]
+  const owned = profile.owned.includes(base.id)
+  const inLoadout = loadout.primary?.id === base.id ? loadout.primary : loadout.sidearm.id === base.id ? loadout.sidearm : null
+  const choice: AttachmentChoice = inLoadout?.attachments ?? {}
+  const resolved = useMemo(() => resolveWeapon(base, choice), [base, choice])
+  const before = weaponStats(base)
+  const after = weaponStats(resolved)
+  const xp = profile.weaponXp[base.id] ?? 0
+  const level = weaponLevel(xp)
+  const nextAt = WEAPON_LEVELS[level] ?? null
+  const prevAt = WEAPON_LEVELS[level - 1] ?? 0
+  const locked = base.requires && !isCleared(profile, base.requires)
+  const price = base.price ?? 0
+  const [name, setName] = useState(loadout.name)
+  useEffect(() => setName(loadout.name), [loadout.name, profile.activeLoadout])
+
+  const status = (id: string) => {
+    const w = WEAPONS[id]
+    if (loadout.primary?.id === id) return 'Primary'
+    if (loadout.sidearm.id === id) return 'Sidearm'
+    if (profile.owned.includes(id)) return 'Owned'
+    if (w.requires && !isCleared(profile, w.requires)) return 'Locked'
+    return `$${(w.price ?? 0).toLocaleString()}`
+  }
+
+  const row = (id: string) => (
+    <li key={id}>
+      <button role="option" aria-selected={id === selected} className={`mission-row ${id === selected ? 'sel' : ''}`} onClick={() => setSelected(id)}>
+        <span className="eyebrow">{WEAPONS[id].category}</span>
+        <span className="mission-row-name">{WEAPONS[id].name}</span>
+        <span className="mission-row-state">{status(id)}</span>
+      </button>
+    </li>
+  )
+
   return (
-    <PanelShell eyebrow="The Ville · armory & gunsmith" title="Loadout" onClose={onClose}>
-      <div className="board">
-        <ul className="mission-list" role="listbox" aria-label="Weapons">
-          {ids.map((id) => (
-            <li key={id}>
-              <button role="option" aria-selected={id === selected} className={`mission-row ${id === selected ? 'sel' : ''}`} onClick={() => setSelected(id)}>
-                <span className="eyebrow">{WEAPONS[id].category}</span>
-                <span className="mission-row-name">{WEAPONS[id].name}</span>
-                <span className="mission-row-state">{profile.loadout.weaponId === id ? 'Equipped' : ''}</span>
-              </button>
-            </li>
+    <PanelShell eyebrow="The Ville · armory & gunsmith" title="Gunsmith" onClose={onClose}>
+      <div className="loadout-bar">
+        <div className="loadout-tabs" role="tablist" aria-label="Loadouts">
+          {profile.loadouts.map((l, i) => (
+            <button key={i} role="tab" aria-selected={i === profile.activeLoadout} className={`chip ${i === profile.activeLoadout ? 'sel' : ''}`} onClick={() => actions.selectLoadout(i)}>
+              {l.name}
+            </button>
           ))}
-        </ul>
+        </div>
+        <label className="loadout-name">
+          <span className="eyebrow">Name</span>
+          <input value={name} maxLength={24} onChange={(e) => setName(e.target.value)} onBlur={() => actions.renameLoadout(profile.activeLoadout, name)} />
+        </label>
+        <div className="cash">
+          <span className="eyebrow">Cash</span>
+          <b>${profile.cash.toLocaleString()}</b>
+        </div>
+      </div>
+      <div className="board gunsmith">
+        <div>
+          <div className="eyebrow list-head">Primary</div>
+          <ul className="mission-list" role="listbox" aria-label="Primary weapons">
+            {primaries.map(row)}
+          </ul>
+          <div className="eyebrow list-head">Sidearm</div>
+          <ul className="mission-list" role="listbox" aria-label="Sidearms">
+            {sidearms.map(row)}
+          </ul>
+        </div>
         <div className="mission-detail">
-          <div className="eyebrow">{w.category} · {w.automatic ? 'automatic' : 'semi-automatic'}</div>
-          <h3 className="mission-name">{w.name}</h3>
+          <div className="gs-top">
+            <WeaponPreview def={base} attachments={choice} />
+            <div className="gs-head">
+              <div className="eyebrow">
+                {base.category} · {resolved.automatic ? 'automatic' : 'semi-automatic'}
+                {base.pellets > 1 ? ` · ${base.pellets} pellets` : ''}
+              </div>
+              <h3 className="mission-name">{base.name}</h3>
+              <p className="note">{base.desc}</p>
+              <div className="wlevel">
+                <span>
+                  Weapon level <b>{level}</b>
+                </span>
+                <span className="xpbar">
+                  <i style={{ transform: `scaleX(${nextAt ? (xp - prevAt) / (nextAt - prevAt) : 1})` }} />
+                </span>
+                <span className="dim">{nextAt ? `${xp} / ${nextAt} XP` : 'max'}</span>
+              </div>
+            </div>
+          </div>
           <dl className="stat-bars">
             {(Object.keys(STAT_LABEL) as StatKey[]).map((k) => (
               <div key={k}>
                 <dt>{STAT_LABEL[k]}</dt>
                 <dd>
-                  <span style={{ transform: `scaleX(${stats[k]})` }} />
+                  <span style={{ transform: `scaleX(${Math.min(before[k], after[k])})` }} />
+                  {after[k] > before[k] && <span className="up" style={{ left: `${before[k] * 100}%`, width: `${(after[k] - before[k]) * 100}%` }} />}
+                  {after[k] < before[k] && <span className="down" style={{ left: `${after[k] * 100}%`, width: `${(before[k] - after[k]) * 100}%` }} />}
                 </dd>
               </div>
             ))}
           </dl>
-          <div className="record">
-            <span>
-              Mag <b>{w.magSize}</b>
-            </span>
-            <span>
-              Reserve <b>{w.reserveMax}</b>
-            </span>
-            <span>
-              Reload <b>{w.reloadTime.toFixed(2)} s</b>
-            </span>
+          {inLoadout ? (
+            <div className="slots">
+              {SLOTS.map((slot) => {
+                const options = Object.values(ATTACHMENTS).filter((a) => a.slot === slot && fitsWeapon(a, base))
+                if (!options.length) return null
+                return (
+                  <div key={slot} className="slot">
+                    <span className="eyebrow">{slot}</span>
+                    <div className="slot-opts">
+                      <button className={`chip ${!choice[slot] ? 'sel' : ''}`} onClick={() => actions.setAttachment(base.id, slot, null)}>
+                        None
+                      </button>
+                      {options.map((a) => {
+                        const open = attachmentUnlocked(profile, base.id, a.id)
+                        return (
+                          <button
+                            key={a.id}
+                            className={`chip ${choice[slot] === a.id ? 'sel' : ''}`}
+                            disabled={!open}
+                            title={open ? a.desc : `Unlocks at weapon level ${a.level}`}
+                            onClick={() => actions.setAttachment(base.id, slot, a.id)}
+                          >
+                            {a.name}
+                            {!open && <em> · Lv {a.level}</em>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
+            <p className="note">{owned ? 'Equip this weapon to fit attachments.' : 'Buy this weapon to equip and customise it.'}</p>
+          )}
+          <div className="gs-actions">
+            {!owned && locked && <p className="note">Clear {MISSIONS.find((m) => m.id === base.requires)?.name ?? base.requires} to unlock.</p>}
+            {!owned && !locked && (
+              <button className="btn primary" disabled={profile.cash < price} onClick={() => actions.buyWeapon(base.id)}>
+                Buy · ${price.toLocaleString()}
+              </button>
+            )}
+            {owned && !inLoadout && (
+              <button className="btn primary" onClick={() => actions.equip(base.id)}>
+                Equip as {isSidearm(base) ? 'sidearm' : 'primary'}
+              </button>
+            )}
+            {inLoadout && loadout.primary?.id === base.id && (
+              <button className="btn ghost" onClick={() => actions.clearPrimary()}>
+                Unequip primary
+              </button>
+            )}
           </div>
-          <p className="note">Fictional, game-balanced stats. More weapons, attachment slots and the Gunsmith workbench arrive in Milestone 3.</p>
-          <button className="btn primary deploy" disabled={equipped} onClick={() => onEquip(w.id)}>
-            {equipped ? 'Equipped' : 'Equip'}
-          </button>
+          <p className="note">Fictional, game-balanced stats. Weapon XP comes from kills; levels unlock attachments.</p>
         </div>
       </div>
     </PanelShell>

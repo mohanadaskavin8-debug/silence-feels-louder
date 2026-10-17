@@ -7,7 +7,9 @@ import type { MapDef, PlayerState, SimEvent, Station, WorldState, ZombieState } 
 import { riseOffset, torsoLean } from '../sim/pose'
 import { Effects } from './effects'
 import { buildMap, type MapView } from './map'
-import { buildHumanoid, buildPistol, infectedOutfit, type HumanoidRig } from './models'
+import { buildHumanoid, infectedOutfit, type HumanoidRig } from './models'
+import { buildWeaponModel, mountInHand } from './weapons'
+import { activeWeapon } from '../sim/weapon'
 
 /** Positions captured before the latest sim step, for render interpolation. */
 export type Snapshot = Map<string, { x: number; z: number; facing: number }>
@@ -22,6 +24,10 @@ export const snapshotOf = (s: WorldState): Snapshot => {
 interface PlayerView {
   rig: HumanoidRig
   muzzle: THREE.Object3D
+  /** The gun currently in hand and what it was built from (weapon id + attachments). */
+  gun: THREE.Group | null
+  gunKey: string
+  twoHanded: boolean
   gait: number
   recoil: number
   /** A shot fired since the last frame: snap to the aim pose before spawning its flash. */
@@ -41,6 +47,32 @@ interface ZombieView {
 }
 
 type ShotEvent = Extract<SimEvent, { type: 'shot' }>
+
+// Any rifle-shaped def works for compiling the gun materials up front.
+const WARMUP_WEAPON = {
+  id: 'warmup',
+  name: 'warmup',
+  category: 'rifle' as const,
+  damage: 1,
+  headshotMultiplier: 1,
+  fireRate: 1,
+  automatic: false,
+  pellets: 1,
+  magSize: 1,
+  reserveMax: 1,
+  reloadTime: 1,
+  range: 1,
+  spreadHip: 0,
+  spreadAim: 0,
+  spreadMoving: 0,
+  spreadPerShot: 0,
+  spreadMax: 0,
+  spreadRecovery: 0,
+  recoilPitch: 0,
+  recoilYaw: 0,
+  knockback: 0,
+  staggerChance: 0,
+}
 
 // Light-space axes of the moon's shadow camera, for snapping its frustum to whole texels.
 const MOON_OFFSET = new THREE.Vector3(-30, 50, -20)
@@ -197,7 +229,7 @@ export class GameRenderer {
   /** Compile every shader the fight will need now, not on the first shot or the first zombie. */
   private warmup() {
     const rig = buildHumanoid({ outfit: infectedOutfit(1), eyeGlow: 0x8a1c12 })
-    buildPistol(rig.handR)
+    mountInHand(rig.handR, buildWeaponModel({ ...WARMUP_WEAPON }, { optic: 'red-dot', muzzle: 'suppressor' }))
     this.scene.add(rig.root)
     const restore = this.effects.warmup()
     try {
@@ -364,10 +396,21 @@ export class GameRenderer {
       let v = this.players.get(p.id)
       if (!v) {
         const rig = buildHumanoid({ outfit: getCharacter(p.characterId).outfit })
-        const muzzle = buildPistol(rig.handR)
         this.scene.add(rig.root)
-        v = { rig, muzzle, gait: 0, recoil: 0, fresh: false, meleeT: 0, reloadT: 0 }
+        v = { rig, muzzle: new THREE.Object3D(), gun: null, gunKey: '', twoHanded: false, gait: 0, recoil: 0, fresh: false, meleeT: 0, reloadT: 0 }
         this.players.set(p.id, v)
+      }
+      // Rebuild the gun in hand when the weapon or its attachments change.
+      const w = activeWeapon(p).def
+      const key = `${w.id}|${JSON.stringify(w.attachments)}`
+      if (key !== v.gunKey) {
+        if (v.gun) v.gun.parent?.remove(v.gun)
+        const built = buildWeaponModel(w, w.attachments)
+        mountInHand(v.rig.handR, built)
+        v.gun = built.group
+        v.muzzle = built.muzzle
+        v.gunKey = key
+        v.twoHanded = w.category !== 'pistol'
       }
       const ip = this.interp(prev, `p:${p.id}`, p.pos.x, p.pos.z, p.facing, alpha)
       v.rig.root.position.set(ip.x, 0, ip.z)
@@ -375,7 +418,7 @@ export class GameRenderer {
       v.rig.root.rotation.y = v.fresh ? p.facing : ip.facing
       // Weapons stay holstered in a safe hub.
       const holstered = !!this.map.safe
-      if (v.muzzle.parent) v.muzzle.parent.visible = !holstered
+      if (v.gun) v.gun.visible = !holstered
       animatePlayer(v, p, p.id === view.localId ? view.pitch : p.pitch, dt, holstered)
     }
     for (const [id, v] of this.players) {
@@ -541,13 +584,29 @@ function animatePlayer(v: PlayerView, p: PlayerState, pitch: number, dt: number,
     r.foreL.rotation.x = 1.1 - t * 0.4
     return
   }
-  if (combat) {
-    const up = Math.PI / 2 + pitch + v.recoil * 0.18
-    r.armR.rotation.set(lerp(r.armR.rotation.x, up, k), 0, lerp(r.armR.rotation.z, -0.1, k))
-    r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.02 + v.recoil * 0.12, k)
-    r.armL.rotation.set(lerp(r.armL.rotation.x, up - 0.05, k), 0, lerp(r.armL.rotation.z, 0.5, k))
-    r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.35, k)
+  const drawing = p.switchLeft > 0
+  if (combat && !drawing) {
+    const up = Math.PI / 2 + pitch + v.recoil * (v.twoHanded ? 0.1 : 0.18)
+    if (v.twoHanded) {
+      // Shouldered long gun: right elbow tucked, support hand reaching out to the handguard.
+      r.armR.rotation.set(lerp(r.armR.rotation.x, up - 0.25, k), 0, lerp(r.armR.rotation.z, -0.02, k))
+      r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.5 + v.recoil * 0.08, k)
+      r.armL.rotation.set(lerp(r.armL.rotation.x, up + 0.05, k), 0, lerp(r.armL.rotation.z, 0.62, k))
+      r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.08, k)
+    } else {
+      r.armR.rotation.set(lerp(r.armR.rotation.x, up, k), 0, lerp(r.armR.rotation.z, -0.1, k))
+      r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.02 + v.recoil * 0.12, k)
+      r.armL.rotation.set(lerp(r.armL.rotation.x, up - 0.05, k), 0, lerp(r.armL.rotation.z, 0.5, k))
+      r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.35, k)
+    }
     r.head.rotation.x = pitch * 0.5 // look up/down with the aim (positive x tips the face up)
+  } else if (v.twoHanded) {
+    // Long gun carried across the body at low ready.
+    r.armR.rotation.set(lerp(r.armR.rotation.x, 0.45 + s * 0.05 * stride, k), 0, lerp(r.armR.rotation.z, -0.05, k))
+    r.foreR.rotation.x = lerp(r.foreR.rotation.x, 0.95, k)
+    r.armL.rotation.set(lerp(r.armL.rotation.x, 0.75, k), 0, lerp(r.armL.rotation.z, 0.55, k))
+    r.foreL.rotation.x = lerp(r.foreL.rotation.x, 0.9, k)
+    r.head.rotation.x = lerp(r.head.rotation.x, 0, k)
   } else {
     // Low ready, off hand swings with the stride.
     r.armR.rotation.set(lerp(r.armR.rotation.x, 0.35 + s * 0.08 * stride, k), 0, lerp(r.armR.rotation.z, -0.05, k))

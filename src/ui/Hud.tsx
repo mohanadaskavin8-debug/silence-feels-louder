@@ -91,7 +91,10 @@ function Ammo({ hud }: { hud: HudSnapshot }) {
   const low = hud.ammo <= Math.ceil(hud.magSize * 0.25)
   return (
     <div className="ammo">
-      <div className="eyebrow">{hud.weaponName}</div>
+      <div className="eyebrow">
+        {hud.weaponName}
+        {hud.switching ? ' · drawing' : ''}
+      </div>
       <div className="ammo-row">
         <span className={`ammo-mag ${low ? 'low' : ''} ${hud.ammo === 0 ? 'empty' : ''}`}>{pad(hud.ammo)}</span>
         <span className="ammo-res">/ {hud.reserve}</span>
@@ -104,6 +107,15 @@ function Ammo({ hud }: { hud: HudSnapshot }) {
       ) : hud.ammo === 0 ? (
         <div className="reload-hint">{hud.reserve > 0 ? 'Press R to reload' : 'Out of ammo — melee (V)'}</div>
       ) : null}
+      {hud.weaponSlots.length > 1 && (
+        <div className="weapon-slots">
+          {hud.weaponSlots.map((w, i) => (
+            <span key={i} className={w.active ? 'on' : ''}>
+              {i + 1} {w.name}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

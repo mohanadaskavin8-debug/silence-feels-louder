@@ -29,6 +29,7 @@ export class InputController {
   private aim = false
   private reloadLatch = false
   private meleeLatch = false
+  private switchLatch = -1
   private recoilPitch = 0
   private lockFailed = false
   private lockFailures = 0
@@ -55,6 +56,7 @@ export class InputController {
     window.addEventListener('mouseup', this.onMouseUp)
     window.addEventListener('mousemove', this.onMouseMove)
     canvas.addEventListener('contextmenu', this.onContext)
+    canvas.addEventListener('wheel', this.onWheel, { passive: true })
     document.addEventListener('pointerlockchange', this.onLockChangeEvt)
     document.addEventListener('pointerlockerror', this.onLockError)
   }
@@ -71,6 +73,7 @@ export class InputController {
     if (c) {
       c.removeEventListener('mousedown', this.onMouseDown)
       c.removeEventListener('contextmenu', this.onContext)
+      c.removeEventListener('wheel', this.onWheel)
     }
     this.canvas = null
   }
@@ -133,9 +136,11 @@ export class InputController {
       fire: on && this.fire,
       reload: on && this.reloadLatch,
       melee: on && this.meleeLatch,
+      switchTo: on ? this.switchLatch : -1,
     }
     this.reloadLatch = false
     this.meleeLatch = false
+    this.switchLatch = -1
     if (this.scripted) {
       Object.assign(input, this.scripted)
       if (this.scripted.yaw !== undefined) this.yaw = this.scripted.yaw
@@ -152,6 +157,8 @@ export class InputController {
     if (!this.enabled) return
     if (e.code === 'KeyR') this.reloadLatch = true
     if (e.code === 'KeyV' || e.code === 'KeyQ') this.meleeLatch = true
+    if (e.code === 'Digit1') this.switchLatch = 0
+    if (e.code === 'Digit2') this.switchLatch = 1
     if (e.code === 'KeyM') this.onToggleMute()
     if (e.code === 'KeyE' || e.code === 'KeyF') this.onInteract()
     // With pointer lock, Esc is eaten by the browser and arrives as a lock change instead; P always works.
@@ -197,6 +204,16 @@ export class InputController {
   }
 
   private onContext = (e: Event) => e.preventDefault()
+
+  private wheelAt = 0
+  private onWheel = (e: WheelEvent) => {
+    if (!this.enabled || Math.abs(e.deltaY) < 1) return
+    // One switch per notch burst: trackpads fire dozens of wheel events per swipe.
+    const now = performance.now()
+    if (now - this.wheelAt < 250) return
+    this.wheelAt = now
+    this.switchLatch = -2
+  }
 
   private onLockChangeEvt = () => {
     const locked = this.locked

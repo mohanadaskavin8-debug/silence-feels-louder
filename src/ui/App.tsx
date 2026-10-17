@@ -53,7 +53,18 @@ export function App() {
         <MissionBoard profile={profile} onDeploy={(id) => game.deploy(id)} onClose={() => game.closePanel()} />
       )}
       {hud.status === 'panel' && profile && hud.panel === 'armory' && (
-        <Armory profile={profile} onEquip={(id) => game.equip(id)} onClose={() => game.closePanel()} />
+        <Armory
+          profile={profile}
+          actions={{
+            selectLoadout: (i) => game.selectLoadout(i),
+            renameLoadout: (i, n) => game.renameLoadout(i, n),
+            equip: (id) => game.equip(id),
+            clearPrimary: () => game.clearPrimary(),
+            setAttachment: (w, slot, id) => game.setAttachment(w, slot, id),
+            buyWeapon: (id) => game.buyWeapon(id),
+          }}
+          onClose={() => game.closePanel()}
+        />
       )}
       {hud.status === 'panel' && profile && hud.panel === 'squad' && (
         <SquadLobby profile={profile} onParty={(m, f) => game.setParty(m, f)} onClose={() => game.closePanel()} />

@@ -1,4 +1,4 @@
-import type { WeaponDef } from '../sim/types'
+import type { ResolvedWeapon, WeaponDef } from '../sim/types'
 
 // Gunsmith attachments. Everything here is fictional game tuning: names describe a role,
 // numbers are balance multipliers, and nothing is a real-world part or specification.
@@ -192,7 +192,7 @@ export const fitsWeapon = (a: AttachmentDef, w: WeaponDef) => a.fits.includes(w.
  * Fold attachments into a weapon's stats. Pure and deterministic, so the authoritative
  * server and the client derive identical stats from the same loadout.
  */
-export function resolveWeapon(base: WeaponDef, choice: AttachmentChoice = {}): WeaponDef & { aimZoom: number; moveSpeed: number; attachments: AttachmentChoice } {
+export function resolveWeapon(base: WeaponDef, choice: AttachmentChoice = {}): ResolvedWeapon {
   let damage = 1
   let fireRate = 1
   let spreadHip = 1

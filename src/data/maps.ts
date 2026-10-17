@@ -189,9 +189,9 @@ export const ENCOUNTERS: Record<string, EncounterDef> = {
     warmup: 4,
     intermission: 7,
     waves: [
-      { count: 6, maxAlive: 6, spawnInterval: 1.4, speedScale: 1 },
-      { count: 10, maxAlive: 8, spawnInterval: 1.1, speedScale: 1.06 },
-      { count: 16, maxAlive: 10, spawnInterval: 0.85, speedScale: 1.12 },
+      { count: 6, maxAlive: 6, spawnInterval: 1.4, speedScale: 1, mix: { regular: 1 } },
+      { count: 10, maxAlive: 8, spawnInterval: 1.1, speedScale: 1.04, mix: { regular: 0.75, runner: 0.25 } },
+      { count: 16, maxAlive: 10, spawnInterval: 0.85, speedScale: 1.08, mix: { regular: 0.62, runner: 0.3, brute: 0.08 }, lead: ['brute'] },
     ],
   },
 }

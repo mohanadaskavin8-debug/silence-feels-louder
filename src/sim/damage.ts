@@ -1,13 +1,19 @@
 import { ZOMBIES } from '../data/enemies'
 import type { SimCtx } from './context'
+import { dropLoot } from './pickups'
 import { rngNext, type Vec3 } from './math'
 import type { PlayerState, ZombieState } from './types'
 
 /** After a stagger starts, further hits can't re-stagger for this long (no melee/headshot stunlock). */
 export const STAGGER_IMMUNITY = 2.4
+/** Weapon XP per kill, plus a bonus for a headshot kill. */
+export const KILL_XP = 10
+export const HEADSHOT_XP = 5
 
 export interface ZombieHitOpts {
   playerId: string
+  /** Weapon that landed the hit (earns weapon XP on a kill); absent for melee. */
+  weaponId?: string
   damage: number
   headshot: boolean
   /** Unit XZ direction the blow travels (from attacker toward the zombie). */
@@ -42,7 +48,13 @@ export function damageZombie(ctx: SimCtx, z: ZombieState, o: ZombieHitOpts): boo
     // A short stumble, not a slide across the courtyard.
     push(z, o, arch.knockbackScale * 0.35)
     z.deathDir = { x: o.dir.x, y: 0, z: o.dir.z }
-    if (shooter) shooter.kills++
+    if (shooter) {
+      shooter.kills++
+      shooter.cash += arch.bounty
+      if (o.headshot) shooter.headshotKills++
+      if (o.weaponId) shooter.weaponXp[o.weaponId] = (shooter.weaponXp[o.weaponId] ?? 0) + KILL_XP + (o.headshot ? HEADSHOT_XP : 0)
+    }
+    dropLoot(ctx, z)
     ctx.state.encounter.totalKills++
     if (ctx.state.encounter.phase === 'wave') ctx.state.encounter.killedThisWave++
     return true
@@ -50,8 +62,11 @@ export function damageZombie(ctx: SimCtx, z: ZombieState, o: ZombieHitOpts): boo
   // Rising zombies finish climbing out; everything else may flinch, but not chain-flinch forever.
   // Past half its windup a swing is committed: only a headshot can still interrupt it.
   const committed = z.mode === 'attack' && z.modeTime > arch.attackWindup * 0.5 && !o.headshot
-  const staggers =
-    z.mode !== 'rising' && !committed && z.staggerImmune <= 0 && (o.headshot || o.melee || rngNext(ctx.state.rng) < o.staggerChance)
+  // Headshots and shoves always rock a normal body; heavy archetypes resist even those.
+  const resist = arch.staggerResist
+  const roll = rngNext(ctx.state.rng)
+  const chance = (o.headshot || o.melee ? 1 : o.staggerChance) * (1 - resist)
+  const staggers = z.mode !== 'rising' && !committed && z.staggerImmune <= 0 && roll < chance
   if (staggers) {
     z.mode = 'stagger'
     z.modeTime = 0
@@ -77,7 +92,7 @@ export function damagePlayer(ctx: SimCtx, p: PlayerState, amount: number, from: 
     p.health = 0
     p.alive = false
     p.vel.x = p.vel.z = 0
-    p.weapon.reloadLeft = 0
+    for (const w of p.weapons) w.reloadLeft = 0
     ctx.events.push({ type: 'playerDied', playerId: p.id })
     return true
   }

@@ -48,7 +48,7 @@ const aimAt = (sim: Simulation, target: Vec3, aimBlend: number) => {
 }
 const noSpread = (sim: Simulation) => {
   // Remove spread noise for aim-precision tests (bloom stays zero with single shots).
-  const w = sim.state.players[0].weapon
+  const w = sim.state.players[0].weapons[0]
   w.bloom = 0
   return w
 }
@@ -130,7 +130,7 @@ describe('weapon feel', () => {
 
   it('rapid fire builds bloom, which decays after', () => {
     const sim = mkSim()
-    const w = sim.state.players[0].weapon
+    const w = sim.state.players[0].weapons[0]
     run(sim, 0.8, (t) => ({ fire: Math.floor(t / (SIM_DT * 5)) % 2 === 0, pitch: 0.3 }))
     expect(w.bloom).toBeGreaterThan(0.01)
     run(sim, 1)

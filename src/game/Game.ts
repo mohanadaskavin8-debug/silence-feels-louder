@@ -2,18 +2,31 @@ import { AudioEngine } from '../audio/audio'
 import { getCharacter } from '../data/characters'
 import { getMap, THE_VILLE } from '../data/maps'
 import { getMission, isUnlocked, type MissionDef } from '../data/missions'
-import { getWeapon } from '../data/weapons'
+import { getWeapon, isSidearm } from '../data/weapons'
+import type { AttachmentChoice } from '../data/attachments'
 import { InputController } from '../input/input'
 import { LocalSession, ONLINE_MULTIPLAYER_AVAILABLE } from '../net/session'
 import { GameRenderer, snapshotOf, type Snapshot } from '../render/renderer'
 import { cameraRig, FOV_AIM, FOV_HIP } from '../sim/camera'
 import { lerp, wrapAngle, yawFromDir, type Vec3 } from '../sim/math'
 import type { PlayerInput, PlayerState, SimEvent, Station, StationKind } from '../sim/types'
-import { currentSpread } from '../sim/weapon'
+import { activeWeapon, currentSpread } from '../sim/weapon'
 import { SIM_DT } from '../sim/world'
 import { newZombie } from '../sim/zombie'
 import { HudStore, type GameStatus, type MissionSummary, type Scene } from './hud'
-import { isCleared, loadProfile, localCharacter, recordMission, saveProfile, type FourthMember, type PartyMode, type Profile } from './profile'
+import {
+  attachmentUnlocked,
+  isCleared,
+  loadProfile,
+  loadoutSlots,
+  localCharacter,
+  recordMission,
+  saveProfile,
+  type FourthMember,
+  type LoadoutPreset,
+  type PartyMode,
+  type Profile,
+} from './profile'
 
 const LOCAL_ID = 'local'
 const HUB_ENCOUNTER = 'hub-idle'
@@ -163,9 +176,63 @@ export class Game {
     this.saveProfile({ ...this.profile, party: { mode, fourth } })
   }
 
+  selectLoadout(index: number) {
+    if (!this.profile.loadouts[index]) return
+    this.saveProfile({ ...this.profile, activeLoadout: index })
+  }
+
+  renameLoadout(index: number, name: string) {
+    const l = this.profile.loadouts[index]
+    if (!l) return
+    this.updateLoadout(index, { ...l, name: name.trim().slice(0, 24) || l.name })
+  }
+
+  /** Put an owned weapon into the active loadout (pistols go to the sidearm slot, the rest to primary). */
   equip(weaponId: string) {
-    getWeapon(weaponId)
-    this.saveProfile({ ...this.profile, loadout: { weaponId } })
+    const w = getWeapon(weaponId)
+    if (!this.profile.owned.includes(weaponId)) return
+    const i = this.profile.activeLoadout
+    const l = this.profile.loadouts[i]
+    const slot = { id: weaponId, attachments: {} }
+    this.updateLoadout(i, isSidearm(w) ? { ...l, sidearm: l.sidearm.id === weaponId ? l.sidearm : slot } : { ...l, primary: l.primary?.id === weaponId ? l.primary : slot })
+  }
+
+  /** Empty the primary slot of the active loadout (sidearm only). */
+  clearPrimary() {
+    const i = this.profile.activeLoadout
+    this.updateLoadout(i, { ...this.profile.loadouts[i], primary: null })
+  }
+
+  /** Fit (or with null, remove) an attachment on a weapon in the active loadout. Locked attachments are refused. */
+  setAttachment(weaponId: string, slot: keyof AttachmentChoice, attachmentId: string | null) {
+    const i = this.profile.activeLoadout
+    const l = this.profile.loadouts[i]
+    const target = l.primary?.id === weaponId ? 'primary' : l.sidearm.id === weaponId ? 'sidearm' : null
+    if (!target) return
+    if (attachmentId && !attachmentUnlocked(this.profile, weaponId, attachmentId)) return
+    const cur = target === 'primary' ? l.primary! : l.sidearm
+    const attachments = { ...(cur.attachments ?? {}) }
+    if (attachmentId) attachments[slot] = attachmentId
+    else delete attachments[slot]
+    this.updateLoadout(i, { ...l, [target]: { ...cur, attachments } })
+  }
+
+  /** Buy a weapon with cash once its mission requirement is met. Returns false if not allowed. */
+  buyWeapon(weaponId: string): boolean {
+    const w = getWeapon(weaponId)
+    const p = this.profile
+    if (p.owned.includes(weaponId)) return false
+    if (w.requires && !isCleared(p, w.requires)) return false
+    const price = w.price ?? 0
+    if (p.cash < price) return false
+    this.saveProfile({ ...p, cash: p.cash - price, owned: [...p.owned, weaponId] })
+    return true
+  }
+
+  private updateLoadout(index: number, preset: LoadoutPreset) {
+    const loadouts = this.profile.loadouts.slice()
+    loadouts[index] = preset
+    this.saveProfile({ ...this.profile, loadouts })
   }
 
   private saveProfile(p: Profile) {
@@ -192,7 +259,7 @@ export class Game {
         {
           mapId: m.mapId,
           encounterId: m.encounterId,
-          players: [{ id: LOCAL_ID, characterId: localCharacter(this.profile), weaponId: this.profile.loadout.weaponId }],
+          players: [{ id: LOCAL_ID, characterId: localCharacter(this.profile), loadout: loadoutSlots(this.profile) }],
           seed: newSeed(),
         },
         LOCAL_ID,
@@ -554,7 +621,8 @@ export class Game {
     const state = this.session.state
     const enc = state.encounter
     const def = this.session.sim.encounter
-    const wdef = getWeapon(me.weapon.defId)
+    const wpn = activeWeapon(me)
+    const wdef = wpn.def
     const ch = getCharacter(me.characterId)
     this.damage = this.damage.filter((d) => this.clock - d.t < 1.4)
     if (this.banner && this.clock - this.banner.t > 3.2) this.banner = null
@@ -576,13 +644,15 @@ export class Game {
       encounterName: this.mission?.name ?? def.name,
       health: Math.ceil(me.health),
       maxHealth: me.maxHealth,
-      ammo: me.weapon.ammo,
+      ammo: wpn.ammo,
       magSize: wdef.magSize,
-      reserve: me.weapon.reserve,
+      reserve: wpn.reserve,
       weaponName: wdef.name,
-      reloadProgress: me.weapon.reloadLeft > 0 ? 1 - me.weapon.reloadLeft / wdef.reloadTime : null,
+      weaponSlots: me.weapons.map((w, i) => ({ name: w.def.name, active: i === me.active })),
+      switching: me.switchLeft > 0,
+      reloadProgress: wpn.reloadLeft > 0 ? 1 - wpn.reloadLeft / wdef.reloadTime : null,
       spread: currentSpread(me),
-      fov: lerp(FOV_HIP, FOV_AIM, me.aimBlend),
+      fov: lerp(FOV_HIP, FOV_AIM * wdef.aimZoom, me.aimBlend),
       aimBlend: me.aimBlend,
       sprinting: me.sprinting,
       phase: enc.phase,
@@ -625,9 +695,11 @@ export class Game {
             pos: { ...me.pos },
             health: me.health,
             alive: me.alive,
-            ammo: me.weapon.ammo,
-            reserve: me.weapon.reserve,
-            weapon: me.weapon.defId,
+            ammo: activeWeapon(me).ammo,
+            reserve: activeWeapon(me).reserve,
+            weapon: activeWeapon(me).def.id,
+            weapons: me.weapons.map((w) => ({ id: w.def.id, ammo: w.ammo, reserve: w.reserve, attachments: w.def.attachments })),
+            active: me.active,
             kills: me.kills,
             yaw: this.input.yaw,
             pitch: this.input.pitch,
@@ -669,6 +741,11 @@ export class Game {
       },
       start: () => this.start(),
       deploy: (missionId: string) => this.deploy(missionId),
+      /** Test helper: grant cash (profile economy checks still apply when buying). */
+      grantCash: (amount: number) => this.saveProfile({ ...this.profile, cash: this.profile.cash + amount }),
+      buyWeapon: (id: string) => this.buyWeapon(id),
+      equip: (id: string) => this.equip(id),
+      setAttachment: (weaponId: string, slot: keyof AttachmentChoice, id: string | null) => this.setAttachment(weaponId, slot, id),
       openPanel: (kind: StationKind) => this.openPanel(kind),
       closePanel: () => this.closePanel(),
       returnToHub: () => this.returnToHub(),

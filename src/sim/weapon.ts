@@ -1,24 +1,33 @@
-import { getWeapon } from '../data/weapons'
 import { bodyDepth, cameraRig } from './camera'
 import type { SimCtx } from './context'
 import { rayCylinder, raySphere, raycastWorld } from './collision'
 import { damageZombie } from './damage'
 import { zombieHitVolume } from './pose'
 import { forwardFromYaw, len3, madd3, norm3, rightFromYaw, rngNext, sub3, type Vec3 } from './math'
-import type { PlayerInput, PlayerState, WeaponDef, WeaponState, ZombieState } from './types'
+import type { PlayerInput, PlayerState, ResolvedWeapon, WeaponDef, WeaponState, ZombieState } from './types'
 
-export const newWeaponState = (defId: string): WeaponState => {
-  const def = getWeapon(defId)
-  return { defId, ammo: def.magSize, reserve: def.reserveMax, cooldown: 0, reloadLeft: 0, bloom: 0, triggerHeld: false, buffer: 0 }
-}
+export const newWeaponState = (def: ResolvedWeapon): WeaponState => ({
+  def,
+  ammo: def.magSize,
+  reserve: def.reserveMax,
+  cooldown: 0,
+  reloadLeft: 0,
+  bloom: 0,
+  triggerHeld: false,
+  buffer: 0,
+})
+
+/** The weapon in the player's hands. */
+export const activeWeapon = (p: PlayerState): WeaponState => p.weapons[p.active]
 
 /** Current cone half-angle for a player's weapon (what the crosshair shows). */
 export function currentSpread(p: PlayerState): number {
-  const def = getWeapon(p.weapon.defId)
+  const w = activeWeapon(p)
+  const def = w.def
   const base = def.spreadHip + (def.spreadAim - def.spreadHip) * p.aimBlend
   const speed = Math.hypot(p.vel.x, p.vel.z)
   const moving = Math.min(1, speed / 4.4) * def.spreadMoving * (1 - 0.6 * p.aimBlend)
-  return Math.min(def.spreadMax, base + moving + p.weapon.bloom)
+  return Math.min(def.spreadMax, base + moving + w.bloom)
 }
 
 /** World position of the muzzle, used for tracers and the muzzle line-of-sight check. */
@@ -30,7 +39,7 @@ export function muzzlePos(p: PlayerState): Vec3 {
 }
 
 export function startReload(ctx: SimCtx, p: PlayerState, def: WeaponDef): boolean {
-  const w = p.weapon
+  const w = activeWeapon(p)
   if (w.reloadLeft > 0 || w.ammo >= def.magSize || w.reserve <= 0) return false
   w.reloadLeft = def.reloadTime
   ctx.events.push({ type: 'reloadStart', playerId: p.id, duration: def.reloadTime })
@@ -38,8 +47,8 @@ export function startReload(ctx: SimCtx, p: PlayerState, def: WeaponDef): boolea
 }
 
 export function updateWeapon(ctx: SimCtx, p: PlayerState, input: PlayerInput, dt: number) {
-  const w = p.weapon
-  const def = getWeapon(w.defId)
+  const w = activeWeapon(p)
+  const def = w.def
   w.cooldown = Math.max(0, w.cooldown - dt)
   w.bloom = Math.max(0, w.bloom - def.spreadRecovery * dt)
 
@@ -62,7 +71,7 @@ export function updateWeapon(ctx: SimCtx, p: PlayerState, input: PlayerInput, dt
   w.triggerHeld = input.fire
   w.buffer = pressed ? TRIGGER_BUFFER : Math.max(0, w.buffer - dt)
   const wants = def.automatic ? input.fire : w.buffer > 0
-  if (!wants || w.reloadLeft > 0 || w.cooldown > 0) return
+  if (!wants || w.reloadLeft > 0 || w.cooldown > 0 || p.switchLeft > 0) return
   w.buffer = 0
 
   if (w.ammo <= 0) {
@@ -179,6 +188,7 @@ function fireShot(ctx: SimCtx, p: PlayerState, input: PlayerInput, def: WeaponDe
       const flat = norm3({ x: dir.x, y: 0, z: dir.z })
       damageZombie(ctx, target.zombie, {
         playerId: p.id,
+        weaponId: def.id,
         damage: def.damage * (target.headshot ? def.headshotMultiplier : 1),
         headshot: target.headshot,
         dir: flat,

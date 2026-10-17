@@ -13,15 +13,19 @@ export const TORSO_PIVOT = 1.02
 export const TORSO_TO_HEAD = 0.72
 export const HEAD_RADIUS = 0.15
 
-/** Per-zombie resting lean (radians, forward), derived from the visual seed. */
-export const baseLean = (seed: number) => 0.12 + ((seed >> 5) % 100) / 900
+/** Per-zombie resting lean (radians, forward), derived from the visual seed and archetype. */
+export const baseLean = (seed: number, archetype: ZombieState['archetype'] = 'regular') => {
+  const jitter = ((seed >> 5) % 100) / 900
+  // Runners hunt bent low; brutes stand tall and lumber.
+  return archetype === 'runner' ? 0.32 + jitter : archetype === 'brute' ? 0.06 + jitter * 0.5 : 0.12 + jitter
+}
 
 /** Forward torso lean the current mode calls for (radians, positive = toward facing). */
 export function torsoLean(z: ZombieState): number {
   const a = ZOMBIES[z.archetype]
   switch (z.mode) {
     case 'chase':
-      return baseLean(z.seed)
+      return baseLean(z.seed, z.archetype)
     case 'attack':
       return z.modeTime < a.attackWindup ? -0.12 : 0.38
     case 'stagger':

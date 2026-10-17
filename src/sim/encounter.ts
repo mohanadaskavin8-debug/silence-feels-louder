@@ -1,8 +1,7 @@
-import { getWeapon } from '../data/weapons'
 import { circleOverlapsAny } from './collision'
 import type { SimCtx } from './context'
 import { rngInt, rngRange } from './math'
-import type { EncounterState } from './types'
+import type { EncounterState, WaveDef, ZombieArchetypeId } from './types'
 import { newZombie } from './zombie'
 
 const MIN_SPAWN_DIST = 13
@@ -46,14 +45,14 @@ export function updateEncounter(ctx: SimCtx, dt: number) {
       const wave = def.waves[e.wave]
       e.spawnTimer -= dt
       if (e.spawnedThisWave < wave.count && e.spawnTimer <= 0 && aliveZombies(ctx) < wave.maxAlive) {
-        if (spawnZombie(ctx, wave.speedScale)) e.spawnedThisWave++
+        if (spawnZombie(ctx, wave.speedScale, pickArchetype(ctx, wave, e.spawnedThisWave))) e.spawnedThisWave++
         e.spawnTimer = wave.spawnInterval
       }
       if (e.killedThisWave >= wave.count) {
         ctx.events.push({ type: 'waveCleared', wave: e.wave })
-        // Resupply between waves: refill reserve ammo.
+        // Resupply between waves: refill reserve ammo on every slot.
         for (const p of ctx.state.players) {
-          if (p.alive) p.weapon.reserve = getWeapon(p.weapon.defId).reserveMax
+          if (p.alive) for (const w of p.weapons) w.reserve = w.def.reserveMax
         }
         if (e.wave >= def.waves.length - 1) {
           e.phase = 'cleared'
@@ -80,8 +79,22 @@ function startWave(ctx: SimCtx, index: number) {
   ctx.events.push({ type: 'waveStart', wave: index, total: ctx.encounter.waves.length })
 }
 
+/** Lead spawns first, then a weighted draw from the wave's mix (deterministic via the world RNG). */
+export function pickArchetype(ctx: SimCtx, wave: WaveDef, index: number): ZombieArchetypeId {
+  if (wave.lead && index < wave.lead.length) return wave.lead[index]
+  const mix = Object.entries(wave.mix ?? { regular: 1 }) as [ZombieArchetypeId, number][]
+  const total = mix.reduce((t, [, w]) => t + Math.max(0, w), 0)
+  if (total <= 0) return 'regular'
+  let r = rngRange(ctx.state.rng, 0, total)
+  for (const [id, w] of mix) {
+    r -= Math.max(0, w)
+    if (r <= 0) return id
+  }
+  return mix[mix.length - 1][0]
+}
+
 /** Spawn at an alley that is not on top of a player. Returns false if nowhere is valid. */
-export function spawnZombie(ctx: SimCtx, speedScale: number): boolean {
+export function spawnZombie(ctx: SimCtx, speedScale: number, archetype: ZombieArchetypeId = 'regular'): boolean {
   const pts = ctx.map.zombieSpawns
   const players = ctx.state.players.filter((p) => p.alive)
   const minDist = (x: number, z: number) =>
@@ -99,7 +112,7 @@ export function spawnZombie(ctx: SimCtx, speedScale: number): boolean {
     if (circleOverlapsAny(ctx.map, x, z, 0.4)) continue
     const crowded = ctx.state.zombies.some((o) => o.mode !== 'dead' && Math.hypot(o.pos.x - x, o.pos.z - z) < 0.8)
     if (crowded && attempt < 5) continue
-    const zb = newZombie(ctx, 'regular', x, z, speedScale)
+    const zb = newZombie(ctx, archetype, x, z, speedScale)
     ctx.state.zombies.push(zb)
     ctx.events.push({ type: 'zombieSpawn', zombieId: zb.id, pos: { ...zb.pos } })
     return true

@@ -1,8 +1,10 @@
 import { ZOMBIES } from '../data/enemies'
 import { getEncounter, getMap } from '../data/maps'
-import { DEFAULT_WEAPON } from '../data/weapons'
+import { resolveWeapon, type AttachmentChoice } from '../data/attachments'
+import { DEFAULT_WEAPON, getWeapon } from '../data/weapons'
 import type { SimCtx } from './context'
 import { newEncounter, updateEncounter } from './encounter'
+import { updatePickups } from './pickups'
 import { NavGrid } from './nav'
 import { newPlayer, updatePlayer } from './player'
 import { emptyInput, type EncounterDef, type MapDef, type PlayerInput, type SimEvent, type WorldState } from './types'
@@ -11,11 +13,21 @@ import { CORPSE_TIME, separate, updateZombie } from './zombie'
 export const SIM_HZ = 60
 export const SIM_DT = 1 / SIM_HZ
 
+export interface LoadoutSlot {
+  id: string
+  attachments?: AttachmentChoice
+}
+
 export interface SimPlayerConfig {
   id: string
   characterId: string
-  weaponId?: string
+  /** Weapon slots in order (primary, sidearm). Defaults to the starter pistol. */
+  loadout?: LoadoutSlot[]
 }
+
+/** Resolve a loadout into weapon stats. Shared by client and (later) the server. */
+export const resolveLoadout = (slots: LoadoutSlot[] | undefined) =>
+  (slots?.length ? slots : [{ id: DEFAULT_WEAPON }]).map((s) => resolveWeapon(getWeapon(s.id), s.attachments ?? {}))
 
 export interface SimConfig {
   mapId: string
@@ -55,10 +67,12 @@ export class Simulation {
       mapId: this.map.id,
       players: this.config.players.map((pc, i) => {
         const s = spawns[i % spawns.length]
-        return newPlayer(pc.id, pc.characterId, pc.weaponId ?? DEFAULT_WEAPON, s.x, s.z, s.yaw)
+        return newPlayer(pc.id, pc.characterId, resolveLoadout(pc.loadout), s.x, s.z, s.yaw)
       }),
       zombies: [],
       nextZombieId: 1,
+      pickups: [],
+      nextPickupId: 1,
       encounter: newEncounter(this.encounter.id),
     }
   }
@@ -81,6 +95,7 @@ export class Simulation {
     for (const z of s.zombies) updateZombie(ctx, z, dt)
     separate(ctx)
     s.zombies = s.zombies.filter((z) => !(z.mode === 'dead' && z.modeTime > CORPSE_TIME))
+    updatePickups(ctx, dt)
     updateEncounter(ctx, dt)
     return events
   }

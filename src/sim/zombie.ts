@@ -36,7 +36,7 @@ export function newZombie(
     attackResolved: false,
     targetId: null,
     seed: Math.floor(rngNext(rng) * 1e9),
-    scale: 0.94 + rngNext(rng) * 0.12,
+    scale: a.scaleMin + rngNext(rng) * (a.scaleMax - a.scaleMin),
     staggerImmune: 0,
     deathDir: { x: 0, y: 0, z: 1 },
   }

@@ -115,9 +115,23 @@ export interface WeaponDef {
   knockback: number
   /** Chance (0..1) a body hit staggers a regular enemy. */
   staggerChance: number
+  /** Armory price in cash (0 = starter). Economy data, ignored by the simulation. */
+  price?: number
+  /** Mission that must be cleared before it can be bought. */
+  requires?: string
+  desc?: string
 }
 
-export type ZombieArchetypeId = 'regular'
+/** A weapon with its attachments folded in (see data/attachments.ts resolveWeapon). */
+export interface ResolvedWeapon extends WeaponDef {
+  /** Aim FOV multiplier from optics. */
+  aimZoom: number
+  /** Movement speed multiplier while this weapon is out. */
+  moveSpeed: number
+  attachments: Partial<Record<string, string>>
+}
+
+export type ZombieArchetypeId = 'regular' | 'runner' | 'brute'
 
 export interface ZombieArchetype {
   id: ZombieArchetypeId
@@ -137,6 +151,15 @@ export interface ZombieArchetype {
   /** Multiplier on incoming knockback. */
   knockbackScale: number
   score: number
+  /** Body scale range (hit volumes and model). */
+  scaleMin: number
+  scaleMax: number
+  /** 0..1: how much this body shrugs off staggers (brutes barely flinch). */
+  staggerResist: number
+  /** Chance the side bag drops loot on death. */
+  lootChance: number
+  /** Cash bounty credited to the killer. */
+  bounty: number
 }
 
 export interface CharacterOutfit {
@@ -168,6 +191,21 @@ export interface WaveDef {
   maxAlive: number
   spawnInterval: number
   speedScale: number
+  /** Relative spawn weights per archetype (defaults to all regular). */
+  mix?: Partial<Record<ZombieArchetypeId, number>>
+  /** Spawned first, before the weighted mix (e.g. a brute to open the final wave). */
+  lead?: ZombieArchetypeId[]
+}
+
+export type PickupKind = 'ammo' | 'cash' | 'medkit'
+
+export interface PickupState {
+  id: number
+  kind: PickupKind
+  amount: number
+  pos: Vec3
+  /** Seconds before it disappears. */
+  ttl: number
 }
 
 export interface EncounterDef {
@@ -196,6 +234,8 @@ export interface PlayerInput {
   fire: boolean
   reload: boolean
   melee: boolean
+  /** -1 = keep, 0..n-1 = switch to that slot, -2 = next slot. */
+  switchTo: number
 }
 
 export const emptyInput = (): PlayerInput => ({
@@ -208,10 +248,12 @@ export const emptyInput = (): PlayerInput => ({
   fire: false,
   reload: false,
   melee: false,
+  switchTo: -1,
 })
 
 export interface WeaponState {
-  defId: string
+  /** Resolved stats (base weapon + attachments). Plain data, so it replicates with the state. */
+  def: ResolvedWeapon
   ammo: number
   reserve: number
   /** Seconds until the next shot is allowed. */
@@ -242,15 +284,24 @@ export interface PlayerState {
   health: number
   maxHealth: number
   alive: boolean
-  weapon: WeaponState
+  /** Loadout slots (primary, sidearm). */
+  weapons: WeaponState[]
+  active: number
+  /** Seconds left drawing the weapon just switched to (can't fire meanwhile). */
+  switchLeft: number
   meleeCooldown: number
   /** Seconds since last damage, drives regen and the HUD vignette. */
   sinceDamage: number
   /** Seconds since the last shot, keeps the body facing the aim for a moment. */
   sinceShot: number
   kills: number
+  headshotKills: number
   shotsFired: number
   shotsHit: number
+  /** Cash earned this mission (bounties + pickups). */
+  cash: number
+  /** Weapon XP earned this mission, by weapon id. */
+  weaponXp: Record<string, number>
 }
 
 export type ZombieMode = 'rising' | 'chase' | 'attack' | 'stagger' | 'dead'
@@ -304,6 +355,8 @@ export interface WorldState {
   players: PlayerState[]
   zombies: ZombieState[]
   nextZombieId: number
+  pickups: PickupState[]
+  nextPickupId: number
   encounter: EncounterState
 }
 
@@ -324,6 +377,7 @@ export type SimEvent =
       recoilYaw: number
     }
   | { type: 'dryFire'; playerId: string }
+  | { type: 'weaponSwitch'; playerId: string; slot: number; weaponId: string }
   | { type: 'reloadStart'; playerId: string; duration: number }
   | { type: 'reloadDone'; playerId: string }
   | { type: 'zombieHit'; zombieId: number; playerId: string; pos: Vec3; damage: number; headshot: boolean; killed: boolean; melee: boolean }
@@ -332,6 +386,8 @@ export type SimEvent =
   | { type: 'playerHit'; playerId: string; damage: number; from: Vec3 }
   | { type: 'playerDied'; playerId: string }
   | { type: 'melee'; playerId: string; hits: number }
+  | { type: 'pickupSpawn'; pickupId: number; kind: PickupKind; pos: Vec3 }
+  | { type: 'pickup'; playerId: string; kind: PickupKind; amount: number; pos: Vec3 }
   | { type: 'waveStart'; wave: number; total: number }
   | { type: 'waveCleared'; wave: number }
   | { type: 'encounterCleared' }

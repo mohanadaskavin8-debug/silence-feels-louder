@@ -128,7 +128,7 @@ describe('weapon', () => {
     const sim = mkSim()
     freezeEncounter(sim)
     const def = getWeapon('ville-9')
-    const w = sim.state.players[0].weapon
+    const w = sim.state.players[0].weapons[0]
     const ev = run(sim, 6, (t) => ({ fire: Math.floor(t / 0.1) % 2 === 0, pitch: 0.3 }))
     expect(ev.filter((e) => e.type === 'shot').length).toBeGreaterThanOrEqual(def.magSize)
     expect(ev.some((e) => e.type === 'dryFire')).toBe(true)
@@ -139,7 +139,7 @@ describe('weapon', () => {
   it('manual reload refills the magazine after reloadTime', () => {
     const sim = mkSim()
     freezeEncounter(sim)
-    const w = sim.state.players[0].weapon
+    const w = sim.state.players[0].weapons[0]
     run(sim, 0.5, (t) => ({ fire: t < 0.05 || (t > 0.2 && t < 0.25), pitch: 0.3 }))
     expect(w.ammo).toBe(13)
     const ev = run(sim, 2, (t) => ({ reload: t < SIM_DT }))
@@ -266,7 +266,7 @@ describe('encounter flow', () => {
     expect(sim.state.zombies.length).toBe(0)
     expect(sim.state.encounter.phase).toBe('warmup')
     expect(sim.state.players[0].health).toBe(100)
-    expect(sim.state.players[0].weapon.ammo).toBe(15)
+    expect(sim.state.players[0].weapons[0].ammo).toBe(15)
   })
 
   it('is deterministic for the same seed and inputs', () => {

@@ -1080,3 +1080,198 @@ kbd {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ---------------------------------------------------------------- gunsmith */
+
+.loadout-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.loadout-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.loadout-name {
+  display: grid;
+  gap: 4px;
+}
+
+.loadout-name input {
+  width: 180px;
+  padding: 7px 10px;
+  background: var(--char);
+  border: 1px solid var(--line);
+  color: var(--bone);
+  font-family: var(--display);
+  font-size: 15px;
+  user-select: text;
+}
+
+.loadout-name input:focus-visible {
+  outline: 2px solid var(--bone);
+  outline-offset: 1px;
+}
+
+.cash {
+  margin-left: auto;
+  display: grid;
+  gap: 2px;
+  text-align: right;
+}
+
+.cash b {
+  font-family: var(--mono);
+  font-size: 22px;
+}
+
+.gunsmith .mission-list {
+  max-height: none;
+}
+
+.list-head {
+  margin: 4px 0 6px;
+}
+
+.list-head:not(:first-child) {
+  margin-top: 14px;
+}
+
+.gs-top {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  gap: 16px;
+  align-items: center;
+}
+
+.weapon-preview {
+  width: 100%;
+  height: 150px;
+  display: block;
+  background: radial-gradient(ellipse at center, rgba(217, 212, 202, 0.08), transparent 70%);
+  border: 1px solid var(--line);
+}
+
+.gs-head .mission-name {
+  margin: 6px 0 4px;
+}
+
+.wlevel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bone-dim);
+}
+
+.wlevel b {
+  color: var(--bone);
+}
+
+.wlevel .dim {
+  color: var(--bone-faint);
+}
+
+.xpbar {
+  position: relative;
+  width: 110px;
+  height: 4px;
+  background: rgba(217, 212, 202, 0.14);
+}
+
+.xpbar i {
+  position: absolute;
+  inset: 0;
+  background: var(--bone);
+  transform-origin: left center;
+}
+
+.stat-bars dd .up,
+.stat-bars dd .down {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  transform: none;
+}
+
+.stat-bars dd .up {
+  background: #8fb08a;
+}
+
+.stat-bars dd .down {
+  background: #a3281f;
+  opacity: 0.8;
+}
+
+.slots {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.slot {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.slot-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.slot-opts .chip {
+  padding: 5px 10px;
+  font-size: 13px;
+}
+
+.slot-opts .chip em {
+  font-style: normal;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--bone-faint);
+}
+
+.chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 4px 0 8px;
+}
+
+.weapon-slots {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--bone-faint);
+}
+
+.weapon-slots .on {
+  color: var(--bone);
+}
+
+@media (max-width: 720px) {
+  .gs-top {
+    grid-template-columns: 1fr;
+  }
+}

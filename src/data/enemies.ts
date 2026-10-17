@@ -1,7 +1,7 @@
 import type { ZombieArchetype, ZombieArchetypeId } from '../sim/types'
 
-// Milestone 1 ships the Regular infected only. Runner and Brute (Milestone 3) slot in
-// here with their own stats; the sim already reads every value from this table.
+// Infected archetypes. Variety comes from behaviour, stats and silhouette (see render/
+// renderer.ts and models.ts), not just textures. The sim reads every value from here.
 
 export const ZOMBIES: Record<ZombieArchetypeId, ZombieArchetype> = {
   regular: {
@@ -21,5 +21,58 @@ export const ZOMBIES: Record<ZombieArchetypeId, ZombieArchetype> = {
     staggerTime: 0.4,
     knockbackScale: 1,
     score: 100,
+    scaleMin: 0.94,
+    scaleMax: 1.06,
+    staggerResist: 0,
+    lootChance: 0.22,
+    bounty: 5,
+  },
+  // Fast, fragile, relentless: outruns a walking player, folds to a couple of hits.
+  runner: {
+    id: 'runner',
+    name: 'Runner',
+    health: 55,
+    speed: 4.3,
+    speedVariance: 0.35,
+    turnRate: 8,
+    radius: 0.34,
+    height: 1.74,
+    attackRange: 1.15,
+    attackDamage: 9,
+    attackWindup: 0.32,
+    attackRecovery: 0.35,
+    attackCooldown: 0.4,
+    staggerTime: 0.3,
+    knockbackScale: 1.3,
+    score: 150,
+    scaleMin: 0.92,
+    scaleMax: 1.0,
+    staggerResist: 0,
+    lootChance: 0.18,
+    bounty: 8,
+  },
+  // Slow, huge, durable: soaks a magazine and hits like a car. Barely flinches.
+  brute: {
+    id: 'brute',
+    name: 'Brute',
+    health: 420,
+    speed: 1.7,
+    speedVariance: 0.15,
+    turnRate: 3,
+    radius: 0.5,
+    height: 2.3,
+    attackRange: 1.6,
+    attackDamage: 30,
+    attackWindup: 0.85,
+    attackRecovery: 0.7,
+    attackCooldown: 0.9,
+    staggerTime: 0.6,
+    knockbackScale: 0.25,
+    score: 600,
+    scaleMin: 1.28,
+    scaleMax: 1.36,
+    staggerResist: 0.85,
+    lootChance: 1,
+    bounty: 40,
   },
 }
